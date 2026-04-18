@@ -128,13 +128,30 @@ final class LibraryService {
 
     // MARK: - Scan Buttons (port pending from NightGard Commander)
 
-    /// Apple Music text search pass. For each candidate track: query iTunes Search
-    /// with "artist title", on match write album/genre/year back via AppleScript.
-    /// Skips tracks already having complete artist+album+genre.
+    /// Apple Music text search pass. Copy-clean-delete-reimport workflow:
+    /// 1. For each candidate track, iTunes Search → if trusted match:
+    ///    a. Write Apple's canonical metadata onto the library track (Music writes through to the file)
+    ///    b. Copy the file to the holding folder renamed "{Artist} {Album} {Track Title}.mp3"
+    ///    c. Delete the original track from the library
+    /// 2. After all tracks processed, create playlist "Cleaned NightGard Library Commander"
+    ///    and add every file from the holding folder — Apple's matching picks up the clean
+    ///    metadata on re-import.
     func runAppleMusicScan() async {
         isWorking = true
         scanCancelRequested = false
         defer { isWorking = false }
+
+        #if os(macOS)
+        let holdingFolder: URL
+        do {
+            holdingFolder = try createHoldingFolder()
+        } catch {
+            statusMessage = "Could not create holding folder: \(error.localizedDescription)"
+            scanState = .complete(kind: "Apple Music Scan", processed: 0, total: 0, matched: 0, failed: 0, skipped: 0, cancelled: false)
+            return
+        }
+        NSLog("NightGard: holding folder = %@", holdingFolder.path)
+        #endif
 
         scanState = .scanning(
             kind: "Apple Music Scan",
@@ -173,16 +190,65 @@ final class LibraryService {
             // Be polite to iTunes Search API: ~3 req/sec ceiling.
             try? await Task.sleep(nanoseconds: 350_000_000)
 
-            if let hit = await iTunesSearch(artist: track.artist, title: track.title),
-               matchIsTrustworthy(query: track.artist, title: track.title, hit: hit) {
-                #if os(macOS)
-                writeBack(persistentID: track.persistentID, hit: hit)
-                #endif
-                matched += 1
-            } else {
+            guard let hit = await iTunesSearch(artist: track.artist, title: track.title),
+                  matchIsTrustworthy(query: track.artist, title: track.title, hit: hit) else {
                 failed += 1
+                continue
             }
+
+            #if os(macOS)
+            // 1a. Write Apple's canonical metadata to the live library track — Music
+            //     writes these through to the underlying audio file.
+            writeBack(persistentID: track.persistentID, hit: hit)
+            // 1b. Copy the file into the holding folder with canonical name.
+            guard let sourceURL = trackLocation(persistentID: track.persistentID) else {
+                failed += 1
+                continue
+            }
+            let filename = canonicalFilename(hit: hit, sourceExtension: sourceURL.pathExtension)
+            let destURL = holdingFolder.appendingPathComponent(filename)
+            do {
+                if !FileManager.default.fileExists(atPath: destURL.path) {
+                    try FileManager.default.copyItem(at: sourceURL, to: destURL)
+                }
+            } catch {
+                NSLog("NightGard: copy failed for %@: %@", sourceURL.path, "\(error)")
+                failed += 1
+                continue
+            }
+            // 1c. Remove the original track (and its file) from the library.
+            deleteTrackFromLibrary(persistentID: track.persistentID)
+            #endif
+            matched += 1
         }
+
+        // 2. Post-scan: create the cleaned playlist and re-import every holding file.
+        #if os(macOS)
+        if matched > 0 && !scanCancelRequested {
+            let playlistName = "Cleaned NightGard Library Commander"
+            scanState = .scanning(
+                kind: "Apple Music Scan",
+                currentTrack: "Creating playlist \(playlistName)…",
+                processed: total,
+                total: total,
+                matched: matched,
+                failed: failed,
+                skipped: skipped
+            )
+            createPlaylistIfNeeded(name: playlistName)
+
+            scanState = .scanning(
+                kind: "Apple Music Scan",
+                currentTrack: "Re-importing cleaned files into \(playlistName)…",
+                processed: total,
+                total: total,
+                matched: matched,
+                failed: failed,
+                skipped: skipped
+            )
+            addFilesInFolderToPlaylist(folder: holdingFolder, playlist: playlistName)
+        }
+        #endif
 
         scanState = .complete(
             kind: "Apple Music Scan",
@@ -195,6 +261,92 @@ final class LibraryService {
         )
         statusMessage = ""
     }
+
+    // MARK: - Holding folder + file operations
+
+    #if os(macOS)
+    private func createHoldingFolder() throws -> URL {
+        let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Downloads")
+        let root = downloads.appendingPathComponent("NightGard Library Commander - Cleaned", isDirectory: true)
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd HHmm"
+        let dated = root.appendingPathComponent(formatter.string(from: Date()), isDirectory: true)
+        try FileManager.default.createDirectory(at: dated, withIntermediateDirectories: true)
+        return dated
+    }
+
+    private func trackLocation(persistentID: String) -> URL? {
+        let script = """
+        tell application "Music"
+            try
+                set t to (first track of library playlist 1 whose persistent ID is "\(persistentID)")
+                return POSIX path of (location of t)
+            on error
+                return ""
+            end try
+        end tell
+        """
+        guard let result = runAppleScript(script), !result.isEmpty else { return nil }
+        return URL(fileURLWithPath: result)
+    }
+
+    private func canonicalFilename(hit: iTunesHit, sourceExtension: String) -> String {
+        let components = [hit.artist, hit.album ?? "", hit.title].filter { !$0.isEmpty }
+        let raw = components.joined(separator: " ")
+        let ext = sourceExtension.isEmpty ? "mp3" : sourceExtension
+        return sanitize(raw) + "." + ext
+    }
+
+    private func sanitize(_ s: String) -> String {
+        let illegal = CharacterSet(charactersIn: "/:\\\"<>|?*")
+        let cleaned = s.components(separatedBy: illegal).joined(separator: "")
+        let trimmed = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+        return String(trimmed.prefix(200))  // keep well under the 255-byte filesystem limit
+    }
+
+    private func deleteTrackFromLibrary(persistentID: String) {
+        let script = """
+        tell application "Music"
+            try
+                delete (first track of library playlist 1 whose persistent ID is "\(persistentID)")
+            end try
+        end tell
+        """
+        _ = runAppleScript(script)
+    }
+
+    private func createPlaylistIfNeeded(name: String) {
+        let safe = escape(name)
+        let script = """
+        tell application "Music"
+            if not (exists user playlist "\(safe)") then
+                make new user playlist with properties {name:"\(safe)"}
+            end if
+        end tell
+        """
+        _ = runAppleScript(script)
+    }
+
+    private func addFilesInFolderToPlaylist(folder: URL, playlist: String) {
+        let fm = FileManager.default
+        guard let entries = try? fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil) else { return }
+        let audioExtensions: Set<String> = ["mp3", "m4a", "aac", "wav", "aiff", "flac"]
+        let audioFiles = entries.filter { audioExtensions.contains($0.pathExtension.lowercased()) }
+        let safePlaylist = escape(playlist)
+        for file in audioFiles {
+            let safePath = escape(file.path)
+            let script = """
+            tell application "Music"
+                try
+                    add POSIX file "\(safePath)" to user playlist "\(safePlaylist)"
+                end try
+            end tell
+            """
+            _ = runAppleScript(script)
+        }
+    }
+    #endif
 
     /// Last-resort Shazam fingerprint. NOT YET IMPLEMENTED — needs file-URL access
     /// via AppleScript + SHSession integration + ShazamQueue/Database port from
@@ -331,37 +483,52 @@ final class LibraryService {
     }
 
     /// Full list of tracks missing Apple Music ID, no display cap. Used by scans.
+    /// Uses AppleScript list-property fetch (one round-trip per property) instead of
+    /// per-track iteration, which would be minutes-long on ~12k tracks.
     private func fetchAllCandidateTracks() -> [UploadedTrackRow] {
         #if os(macOS)
         ensureMusicRunning()
+        let sep = "‖"  // double vertical bar — unlikely in track metadata
         let script = """
         tell application "Music"
-            set output to ""
             set candidates to (every track of library playlist 1 whose cloud status is not matched and cloud status is not subscription and cloud status is not purchased)
-            repeat with t in candidates
-                try
-                    set g to genre of t
-                on error
-                    set g to ""
-                end try
-                set output to output & (persistent ID of t) & "\t" & (name of t) & "\t" & (artist of t) & "\t" & (album of t) & "\t" & g & linefeed
-            end repeat
-            return output
+            if (count of candidates) is 0 then return ""
+            set idList to (get persistent ID of candidates)
+            set nameList to (get name of candidates)
+            set artistList to (get artist of candidates)
+            set albumList to (get album of candidates)
+            set genreList to (get genre of candidates)
+            set AppleScript's text item delimiters to "\(sep)"
+            set idBlob to idList as text
+            set nameBlob to nameList as text
+            set artistBlob to artistList as text
+            set albumBlob to albumList as text
+            set genreBlob to genreList as text
+            set AppleScript's text item delimiters to ""
+            return idBlob & "§" & nameBlob & "§" & artistBlob & "§" & albumBlob & "§" & genreBlob
         end tell
         """
-        guard let result = runAppleScript(script) else { return [] }
-        let lines = result.split(separator: "\n", omittingEmptySubsequences: true)
-        return lines.compactMap { line -> UploadedTrackRow? in
-            let cols = line.components(separatedBy: "\t")
-            guard cols.count >= 4 else { return nil }
-            return UploadedTrackRow(
-                persistentID: cols[0],
-                title: cols[1],
-                artist: cols[2],
-                album: cols[3],
-                genre: cols.count >= 5 ? cols[4] : ""
-            )
+        guard let result = runAppleScript(script), !result.isEmpty else { return [] }
+        let columns = result.components(separatedBy: "§")
+        guard columns.count >= 5 else { return [] }
+        let ids = columns[0].components(separatedBy: sep)
+        let names = columns[1].components(separatedBy: sep)
+        let artists = columns[2].components(separatedBy: sep)
+        let albums = columns[3].components(separatedBy: sep)
+        let genres = columns[4].components(separatedBy: sep)
+        let n = min(ids.count, names.count, artists.count, albums.count, genres.count)
+        var rows: [UploadedTrackRow] = []
+        rows.reserveCapacity(n)
+        for i in 0..<n {
+            rows.append(UploadedTrackRow(
+                persistentID: ids[i],
+                title: names[i],
+                artist: artists[i],
+                album: albums[i],
+                genre: genres[i]
+            ))
         }
+        return rows
         #else
         return []
         #endif

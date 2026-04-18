@@ -42,14 +42,14 @@ struct LibraryPaneView: View {
                     Task { await library.runShazamScan() }
                 } label: {
                     Label {
-                        Text("Shazam Scan (pending)")
+                        Text("Shazam Scan (last resort)")
                     } icon: {
                         Image(systemName: "shazam.logo.fill")
                             .foregroundStyle(.blue)
                     }
                 }
                 .buttonStyle(.bordered)
-                .help("Shazam Scan is not yet implemented — port of ShazamService from NightGard Commander is next.")
+                .help("Port of ShazamService + SHSession from NightGard Commander is next. Button is wired but not yet functional.")
                 .disabled(true)
             }
             .padding()
