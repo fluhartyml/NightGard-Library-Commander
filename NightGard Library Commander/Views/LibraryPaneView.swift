@@ -15,8 +15,13 @@ struct LibraryPaneView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("Uploaded tracks: \(library.uploadedTracks.count)")
-                    .font(.system(size: 18))
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(Color.red)
+                        .frame(width: 10, height: 10)
+                    Text(headerCountLabel)
+                        .font(.system(size: 18))
+                }
                 Spacer()
                 Button("Refresh") {
                     Task { await library.refreshUploadedTracks() }
@@ -50,12 +55,19 @@ struct LibraryPaneView: View {
                 )
             } else {
                 List(library.uploadedTracks) { row in
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(row.title.isEmpty ? "(no title)" : row.title)
-                            .font(.system(size: 18))
-                        Text("\(row.artist.isEmpty ? "(no artist)" : row.artist) — \(row.album.isEmpty ? "(no album)" : row.album)")
-                            .font(.system(size: 14))
-                            .foregroundStyle(.secondary)
+                    HStack(alignment: .top, spacing: 10) {
+                        Circle()
+                            .fill(row.health.color)
+                            .frame(width: 10, height: 10)
+                            .padding(.top, 6)
+                            .help(row.health.label)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(row.title.isEmpty ? "(no title)" : row.title)
+                                .font(.system(size: 18))
+                            Text("\(row.artist.isEmpty ? "(no artist)" : row.artist) — \(row.album.isEmpty ? "(no album)" : row.album)\(row.genre.isEmpty ? "" : " · \(row.genre)")")
+                                .font(.system(size: 14))
+                                .foregroundStyle(.secondary)
+                        }
                     }
                 }
             }
@@ -67,5 +79,24 @@ struct LibraryPaneView: View {
             )
             #endif
         }
+        .task {
+            #if os(macOS)
+            if library.uploadedTracks.isEmpty && !library.isWorking {
+                await library.refreshUploadedTracks()
+            }
+            #endif
+        }
+    }
+
+    private var headerCountLabel: String {
+        let shown = library.uploadedTracks.count
+        let total = library.uploadedTracksTotal
+        if total == 0 {
+            return "Tracks needing Apple Music ID: 0"
+        }
+        if shown < total {
+            return "Tracks needing Apple Music ID: \(total.formatted()) · showing first \(shown.formatted())"
+        }
+        return "Tracks needing Apple Music ID: \(total.formatted())"
     }
 }

@@ -8,6 +8,7 @@
 //
 
 import Foundation
+import SwiftUI
 import MusicKit
 #if os(macOS)
 import AppKit
@@ -21,6 +22,7 @@ final class LibraryService {
     var playlists: [Playlist] = []
     var stats: LibraryStats = .empty
     var uploadedTracks: [UploadedTrackRow] = []
+    var uploadedTracksTotal: Int = 0
     var isWorking = false
     var statusMessage = ""
 
@@ -214,22 +216,34 @@ final class LibraryService {
 
     private func runAppleScriptUploadedTracks() -> [UploadedTrackRow] {
         ensureMusicRunning()
+        // Pull tracks with no Apple Music ID (uploaded, error, or other problem states).
+        // Matched / subscription / purchased tracks are excluded (they have Apple Music IDs).
         let script = """
         tell application "Music"
             set output to ""
-            set uploadedList to (every track of library playlist 1 whose cloud status is uploaded)
+            set candidates to (every track of library playlist 1 whose cloud status is not matched and cloud status is not subscription and cloud status is not purchased)
+            set totalCount to count of candidates
             set maxRows to 200
-            set n to count of uploadedList
+            set n to totalCount
             if n > maxRows then set n to maxRows
             repeat with i from 1 to n
-                set t to item i of uploadedList
-                set output to output & (persistent ID of t) & "\t" & (name of t) & "\t" & (artist of t) & "\t" & (album of t) & linefeed
+                set t to item i of candidates
+                try
+                    set g to genre of t
+                on error
+                    set g to ""
+                end try
+                set output to output & (persistent ID of t) & "\t" & (name of t) & "\t" & (artist of t) & "\t" & (album of t) & "\t" & g & linefeed
             end repeat
-            return output
+            return (totalCount as text) & "||" & output
         end tell
         """
         guard let result = runAppleScript(script) else { return [] }
-        let lines = result.split(separator: "\n", omittingEmptySubsequences: true)
+        let parts = result.split(separator: "||", maxSplits: 1).map(String.init)
+        let totalCount = parts.count >= 1 ? Int(parts[0].trimmingCharacters(in: .whitespaces)) ?? 0 : 0
+        self.uploadedTracksTotal = totalCount
+        let rowsBlob = parts.count >= 2 ? parts[1] : ""
+        let lines = rowsBlob.split(separator: "\n", omittingEmptySubsequences: true)
         return lines.compactMap { line -> UploadedTrackRow? in
             let cols = line.components(separatedBy: "\t")
             guard cols.count >= 4 else { return nil }
@@ -237,7 +251,8 @@ final class LibraryService {
                 persistentID: cols[0],
                 title: cols[1],
                 artist: cols[2],
-                album: cols[3]
+                album: cols[3],
+                genre: cols.count >= 5 ? cols[4] : ""
             )
         }
     }
@@ -296,5 +311,17 @@ struct UploadedTrackRow: Identifiable, Hashable {
     let title: String
     let artist: String
     let album: String
+    let genre: String
     var id: String { persistentID }
+
+    /// All rows from this query lack Apple Music ID by definition → red.
+    /// Future pass will introduce yellow (has ID, missing metadata) and green (complete).
+    var health: TrackHealth { .red }
+}
+
+enum TrackHealth {
+    case red, yellow, green
+
+    var color: Color { switch self { case .red: .red; case .yellow: .yellow; case .green: .green } }
+    var label: String { switch self { case .red: "No Apple Music ID"; case .yellow: "Partial metadata"; case .green: "OK" } }
 }
