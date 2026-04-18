@@ -186,13 +186,23 @@ final class LibraryService {
 
     private func runAppleScript(_ source: String) -> String? {
         var error: NSDictionary?
-        guard let script = NSAppleScript(source: source) else { return nil }
-        let descriptor = script.executeAndReturnError(&error)
-        if let err = error {
-            statusMessage = "AppleScript error: \(err)"
+        guard let script = NSAppleScript(source: source) else {
+            statusMessage = "NSAppleScript init failed"
             return nil
         }
-        return descriptor.stringValue
+        let descriptor = script.executeAndReturnError(&error)
+        if let err = error {
+            let num = err[NSAppleScript.errorNumber] ?? "?"
+            let msg = err[NSAppleScript.errorMessage] ?? "(no message)"
+            statusMessage = "AppleScript error \(num): \(msg)"
+            return nil
+        }
+        if let result = descriptor.stringValue {
+            statusMessage = ""
+            return result
+        }
+        statusMessage = "AppleScript returned no string. Descriptor type: \(descriptor.descriptorType). Likely sandbox/TCC silently dropped the event — check System Settings → Privacy & Security → Automation."
+        return nil
     }
     #endif
 }
