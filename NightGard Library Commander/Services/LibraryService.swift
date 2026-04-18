@@ -123,8 +123,31 @@ final class LibraryService {
     // MARK: - AppleScript implementations
 
     #if os(macOS)
+    private func ensureMusicRunning() {
+        let bundleID = "com.apple.Music"
+        if !NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).isEmpty {
+            return
+        }
+        NSLog("NightGard: Music not running, launching…")
+        let musicURL = URL(fileURLWithPath: "/System/Applications/Music.app")
+        let config = NSWorkspace.OpenConfiguration()
+        config.activates = false
+        NSWorkspace.shared.openApplication(at: musicURL, configuration: config) { _, err in
+            if let err { NSLog("NightGard: Music launch error: %@", "\(err)") }
+        }
+        for _ in 0..<20 {
+            Thread.sleep(forTimeInterval: 0.25)
+            if !NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).isEmpty {
+                NSLog("NightGard: Music is now running")
+                return
+            }
+        }
+        NSLog("NightGard: Music failed to launch within 5s")
+    }
+
     private func runAppleScriptStats() -> LibraryStats {
         NSLog("NightGard: runAppleScriptStats start")
+        ensureMusicRunning()
         let script = """
         tell application "Music"
             set t to count of tracks
@@ -165,6 +188,7 @@ final class LibraryService {
     }
 
     private func runAppleScriptUploadedTracks() -> [UploadedTrackRow] {
+        ensureMusicRunning()
         let script = """
         tell application "Music"
             set output to ""
