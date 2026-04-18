@@ -38,8 +38,15 @@ struct LibraryPaneView: View {
                 .controlSize(.large)
                 .disabled(library.isWorking || library.uploadedTracks.isEmpty)
 
-                Button("Shazam Scan (last resort)") {
+                Button {
                     Task { await library.runShazamScan() }
+                } label: {
+                    Label {
+                        Text("Shazam Scan (last resort)")
+                    } icon: {
+                        Image(systemName: "shazam.logo.fill")
+                            .foregroundStyle(.blue)
+                    }
                 }
                 .buttonStyle(.bordered)
                 .disabled(library.isWorking || library.uploadedTracks.isEmpty)
@@ -51,6 +58,8 @@ struct LibraryPaneView: View {
                 .foregroundStyle(.secondary)
                 .padding(.horizontal)
                 .padding(.bottom, 8)
+
+            scanBanner
 
             if !library.statusMessage.isEmpty {
                 Text(library.statusMessage)
@@ -99,6 +108,69 @@ struct LibraryPaneView: View {
                 await library.refreshUploadedTracks()
             }
             #endif
+        }
+    }
+
+    @ViewBuilder
+    private var scanBanner: some View {
+        switch library.scanState {
+        case .idle:
+            EmptyView()
+        case .scanning(let kind, let current, let processed, let total, let matched, let failed, let skipped):
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("\(kind) — \(processed.formatted()) / \(total.formatted())")
+                        .font(.system(size: 15, weight: .semibold))
+                    Spacer()
+                    Button("Cancel") { library.cancelScan() }
+                        .buttonStyle(.bordered)
+                }
+                ProgressView(value: Double(processed), total: Double(max(total, 1)))
+                Text(current)
+                    .font(.system(size: 13, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                HStack(spacing: 16) {
+                    countPill("Matched", matched, .green)
+                    countPill("Failed", failed, .red)
+                    countPill("Skipped", skipped, .secondary)
+                }
+            }
+            .padding()
+            .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
+            .padding(.horizontal)
+            .padding(.bottom, 8)
+        case .complete(let kind, let processed, let total, let matched, let failed, let skipped, let cancelled):
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Image(systemName: cancelled ? "stop.circle.fill" : "checkmark.circle.fill")
+                        .foregroundStyle(cancelled ? .orange : .green)
+                    Text(cancelled ? "\(kind) cancelled" : "\(kind) complete")
+                        .font(.system(size: 15, weight: .semibold))
+                    Spacer()
+                    Text("\(processed.formatted()) / \(total.formatted())")
+                        .font(.system(size: 13, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
+                HStack(spacing: 16) {
+                    countPill("Matched", matched, .green)
+                    countPill("Failed", failed, .red)
+                    countPill("Skipped", skipped, .secondary)
+                }
+            }
+            .padding()
+            .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
+            .padding(.horizontal)
+            .padding(.bottom, 8)
+        }
+    }
+
+    @ViewBuilder
+    private func countPill(_ label: String, _ value: Int, _ color: Color) -> some View {
+        HStack(spacing: 4) {
+            Circle().fill(color).frame(width: 8, height: 8)
+            Text("\(label): \(value.formatted())")
+                .font(.system(size: 13, design: .monospaced))
         }
     }
 

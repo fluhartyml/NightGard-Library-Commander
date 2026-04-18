@@ -26,6 +26,10 @@ final class LibraryService {
     var isWorking = false
     var statusMessage = ""
 
+    // Scan state (Apple Music Scan / Shazam Scan)
+    var scanState: ScanState = .idle
+    var scanCancelRequested = false
+
     // MARK: - Authorization
 
     func authorize() async {
@@ -128,20 +132,72 @@ final class LibraryService {
     /// For each uploaded/problem track: take filename + ID3 → iTunes Search API →
     /// fill metadata, add Apple Music ID, cover art, save to scan DB.
     func runAppleMusicScan() async {
-        isWorking = true
-        defer { isWorking = false }
-        statusMessage = "Apple Music Scan: port of iTunesSearchService from NightGard Commander pending. When wired, will run text search against \(uploadedTracks.count) uploaded tracks."
-        try? await Task.sleep(nanoseconds: 600_000_000)
+        await runSimulatedScan(kind: .appleMusic)
     }
 
     /// Last-resort Shazam fingerprint. Ports ShazamService from NightGard Commander.
     /// Only runs on tracks still missing Apple Music ID after the Apple Music Scan pass.
     /// Honors 2s throttle between calls and 30s cooldown on rate-limit (error 201).
     func runShazamScan() async {
+        await runSimulatedScan(kind: .shazam)
+    }
+
+    func cancelScan() {
+        scanCancelRequested = true
+    }
+
+    private enum ScanKind {
+        case appleMusic, shazam
+        var label: String { switch self { case .appleMusic: "Apple Music Scan"; case .shazam: "Shazam Scan" } }
+        var stepDelayNs: UInt64 { switch self { case .appleMusic: 50_000_000; case .shazam: 150_000_000 } }
+    }
+
+    // Simulated scan loop. Real port of iTunesSearchService / ShazamService replaces
+    // the body inside the for-loop. The UI updates driven by scanState stay the same.
+    private func runSimulatedScan(kind: ScanKind) async {
+        guard !uploadedTracks.isEmpty else { return }
         isWorking = true
+        scanCancelRequested = false
         defer { isWorking = false }
-        statusMessage = "Shazam Scan: port of ShazamService from NightGard Commander pending. When wired, will fingerprint only tracks still missing Apple Music ID after the Apple Music Scan pass."
-        try? await Task.sleep(nanoseconds: 600_000_000)
+
+        let candidates = uploadedTracks
+        let total = candidates.count
+        var matched = 0, failed = 0, skipped = 0
+
+        for (index, track) in candidates.enumerated() {
+            if scanCancelRequested { break }
+
+            scanState = .scanning(
+                kind: kind.label,
+                currentTrack: "\(track.artist) — \(track.title)",
+                processed: index,
+                total: total,
+                matched: matched,
+                failed: failed,
+                skipped: skipped
+            )
+
+            try? await Task.sleep(nanoseconds: kind.stepDelayNs)
+
+            // Stubbed outcome: ~70% matched, ~20% failed, ~10% skipped — until real logic lands.
+            let roll = Int.random(in: 0..<10)
+            switch roll {
+            case 0..<7: matched += 1
+            case 7..<9: failed += 1
+            default: skipped += 1
+            }
+        }
+
+        scanState = .complete(
+            kind: kind.label,
+            processed: min(total, candidates.count),
+            total: total,
+            matched: matched,
+            failed: failed,
+            skipped: skipped,
+            cancelled: scanCancelRequested
+        )
+        statusMessage = "\(kind.label) stub — real port pending from NightGard Commander. Numbers are simulated."
     }
 
     // MARK: - AppleScript implementations
@@ -304,6 +360,12 @@ struct LibraryStats: Equatable {
         missingArtist: 0, missingAlbum: 0, missingGenre: 0,
         macOnly: false
     )
+}
+
+enum ScanState: Equatable {
+    case idle
+    case scanning(kind: String, currentTrack: String, processed: Int, total: Int, matched: Int, failed: Int, skipped: Int)
+    case complete(kind: String, processed: Int, total: Int, matched: Int, failed: Int, skipped: Int, cancelled: Bool)
 }
 
 struct UploadedTrackRow: Identifiable, Hashable {
