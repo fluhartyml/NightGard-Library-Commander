@@ -147,7 +147,7 @@ final class LibraryService {
             holdingFolder = try createHoldingFolder()
         } catch {
             statusMessage = "Could not create holding folder: \(error.localizedDescription)"
-            scanState = .complete(kind: "Apple Music Scan", processed: 0, total: 0, matched: 0, failed: 0, skipped: 0, cancelled: false)
+            scanState = .complete(kind: "Apple Music Scan", processed: 0, total: 0, matched: 0, failed: 0, skipped: 0, needsDownload: 0, cancelled: false)
             return
         }
         NSLog("NightGard: holding folder = %@", holdingFolder.path)
@@ -158,16 +158,16 @@ final class LibraryService {
             currentTrack: "Loading full candidate list…",
             processed: 0,
             total: uploadedTracksTotal,
-            matched: 0, failed: 0, skipped: 0
+            matched: 0, failed: 0, skipped: 0, needsDownload: 0
         )
         let candidates = fetchAllCandidateTracks()
         let total = candidates.count
         guard total > 0 else {
-            scanState = .complete(kind: "Apple Music Scan", processed: 0, total: 0, matched: 0, failed: 0, skipped: 0, cancelled: false)
+            scanState = .complete(kind: "Apple Music Scan", processed: 0, total: 0, matched: 0, failed: 0, skipped: 0, needsDownload: 0, cancelled: false)
             return
         }
 
-        var matched = 0, failed = 0, skipped = 0
+        var matched = 0, failed = 0, skipped = 0, needsDownload = 0
         for (index, track) in candidates.enumerated() {
             if scanCancelRequested { break }
 
@@ -178,7 +178,8 @@ final class LibraryService {
                 total: total,
                 matched: matched,
                 failed: failed,
-                skipped: skipped
+                skipped: skipped,
+                needsDownload: needsDownload
             )
 
             // Skip if we have no search anchor (both artist and title empty).
@@ -186,6 +187,15 @@ final class LibraryService {
                 skipped += 1
                 continue
             }
+
+            #if os(macOS)
+            // Cheap check FIRST: does this track even have a local file? iCloud-only
+            // tracks return empty location → skip without hitting iTunes at all.
+            guard let sourceURL = trackLocation(persistentID: track.persistentID) else {
+                needsDownload += 1
+                continue
+            }
+            #endif
 
             // Be polite to iTunes Search API: ~3 req/sec ceiling.
             try? await Task.sleep(nanoseconds: 350_000_000)
@@ -201,10 +211,6 @@ final class LibraryService {
             //     writes these through to the underlying audio file.
             writeBack(persistentID: track.persistentID, hit: hit)
             // 1b. Copy the file into the holding folder with canonical name.
-            guard let sourceURL = trackLocation(persistentID: track.persistentID) else {
-                failed += 1
-                continue
-            }
             let filename = canonicalFilename(hit: hit, sourceExtension: sourceURL.pathExtension)
             let destURL = holdingFolder.appendingPathComponent(filename)
             do {
@@ -233,7 +239,8 @@ final class LibraryService {
                 total: total,
                 matched: matched,
                 failed: failed,
-                skipped: skipped
+                skipped: skipped,
+                needsDownload: needsDownload
             )
             createPlaylistIfNeeded(name: playlistName)
 
@@ -244,7 +251,8 @@ final class LibraryService {
                 total: total,
                 matched: matched,
                 failed: failed,
-                skipped: skipped
+                skipped: skipped,
+                needsDownload: needsDownload
             )
             addFilesInFolderToPlaylist(folder: holdingFolder, playlist: playlistName)
         }
@@ -257,6 +265,7 @@ final class LibraryService {
             matched: matched,
             failed: failed,
             skipped: skipped,
+            needsDownload: needsDownload,
             cancelled: scanCancelRequested
         )
         statusMessage = ""
@@ -371,14 +380,25 @@ final class LibraryService {
     }
 
     private func iTunesSearch(artist: String, title: String) async -> iTunesHit? {
-        let term = [artist, title].filter { !$0.isEmpty }.joined(separator: " ")
-        guard let encoded = term.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+        let cleanArtist = sanitizeSearchTerm(artist)
+        let cleanTitle = sanitizeSearchTerm(title)
+        let term = [cleanArtist, cleanTitle].filter { !$0.isEmpty }.joined(separator: " ")
+        let capped = String(term.prefix(120))  // iTunes Search tolerates about this much
+        guard let encoded = capped.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
               !encoded.isEmpty,
               let url = URL(string: "https://itunes.apple.com/search?term=\(encoded)&media=music&entity=song&limit=1") else {
             return nil
         }
         do {
-            let (data, _) = try await URLSession.shared.data(from: url)
+            let (data, response) = try await URLSession.shared.data(from: url)
+            if let http = response as? HTTPURLResponse, http.statusCode != 200 {
+                NSLog("NightGard: iTunes HTTP %d for '%@' (body %d bytes)", http.statusCode, capped, data.count)
+                return nil
+            }
+            guard !data.isEmpty else {
+                NSLog("NightGard: iTunes empty body for '%@'", capped)
+                return nil
+            }
             guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let results = json["results"] as? [[String: Any]],
                   let first = results.first else { return nil }
@@ -400,9 +420,27 @@ final class LibraryService {
                 year: year
             )
         } catch {
-            NSLog("NightGard: iTunes search error for '%@': %@", term, "\(error)")
+            NSLog("NightGard: iTunes search error for '%@': %@", capped, "\(error)")
             return nil
         }
+    }
+
+    /// Scrubs decade-old tag cruft from search terms before sending to iTunes Search:
+    /// strip parentheticals and brackets (often contain remix tags, ripper notes),
+    /// collapse whitespace, strip leading track numbers, remove disallowed chars.
+    private func sanitizeSearchTerm(_ s: String) -> String {
+        var t = s
+        // Strip anything in ( ) or [ ] or { }
+        t = t.replacingOccurrences(of: "\\([^)]*\\)", with: " ", options: .regularExpression)
+        t = t.replacingOccurrences(of: "\\[[^\\]]*\\]", with: " ", options: .regularExpression)
+        t = t.replacingOccurrences(of: "\\{[^}]*\\}", with: " ", options: .regularExpression)
+        // Strip leading "NNN " / "NN - " track number prefixes
+        t = t.replacingOccurrences(of: "^\\d{1,3}\\s*[-_.]?\\s*", with: "", options: .regularExpression)
+        // Strip file extensions if someone crammed them into the tag
+        t = t.replacingOccurrences(of: "\\.(mp3|m4a|wav|aac|aiff|flac)\\b", with: "", options: [.regularExpression, .caseInsensitive])
+        // Collapse whitespace
+        t = t.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+        return t.trimmingCharacters(in: .whitespaces)
     }
 
     // MARK: - AppleScript write-back
@@ -707,8 +745,8 @@ struct LibraryStats: Equatable {
 
 enum ScanState: Equatable {
     case idle
-    case scanning(kind: String, currentTrack: String, processed: Int, total: Int, matched: Int, failed: Int, skipped: Int)
-    case complete(kind: String, processed: Int, total: Int, matched: Int, failed: Int, skipped: Int, cancelled: Bool)
+    case scanning(kind: String, currentTrack: String, processed: Int, total: Int, matched: Int, failed: Int, skipped: Int, needsDownload: Int)
+    case complete(kind: String, processed: Int, total: Int, matched: Int, failed: Int, skipped: Int, needsDownload: Int, cancelled: Bool)
 }
 
 struct UploadedTrackRow: Identifiable, Hashable {

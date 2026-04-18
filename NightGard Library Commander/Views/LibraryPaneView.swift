@@ -117,7 +117,7 @@ struct LibraryPaneView: View {
         switch library.scanState {
         case .idle:
             EmptyView()
-        case .scanning(let kind, let current, let processed, let total, let matched, let failed, let skipped):
+        case .scanning(let kind, let current, let processed, let total, let matched, let failed, let skipped, let needsDownload):
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
                     Text("\(kind) — \(processed.formatted()) / \(total.formatted())")
@@ -134,6 +134,7 @@ struct LibraryPaneView: View {
                 HStack(spacing: 16) {
                     countPill("Matched", matched, .green)
                     countPill("Failed", failed, .red)
+                    countPill("Needs download", needsDownload, .blue)
                     countPill("Skipped", skipped, .secondary)
                 }
             }
@@ -141,7 +142,7 @@ struct LibraryPaneView: View {
             .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
             .padding(.horizontal)
             .padding(.bottom, 8)
-        case .complete(let kind, let processed, let total, let matched, let failed, let skipped, let cancelled):
+        case .complete(let kind, let processed, let total, let matched, let failed, let skipped, let needsDownload, let cancelled):
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
                     Image(systemName: cancelled ? "stop.circle.fill" : "checkmark.circle.fill")
@@ -156,7 +157,14 @@ struct LibraryPaneView: View {
                 HStack(spacing: 16) {
                     countPill("Matched", matched, .green)
                     countPill("Failed", failed, .red)
+                    countPill("Needs download", needsDownload, .blue)
                     countPill("Skipped", skipped, .secondary)
+                }
+                if needsDownload > 0 {
+                    Text("Needs download: \(needsDownload) tracks are iCloud-only on this Mac. In Music, select them and tap Download, then rerun Apple Music Scan to process.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .padding(.top, 4)
                 }
             }
             .padding()
