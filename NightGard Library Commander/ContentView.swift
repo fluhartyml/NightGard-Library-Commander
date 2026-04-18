@@ -61,7 +61,7 @@ struct ContentView: View {
         case .playlists: PlaylistsPaneView()
         case .libraryBrowser: LibraryPaneView()
         case .locker: LockerPaneView()
-        case .stats: StatsPaneView()
+        case .stats: StatsPaneView(onJumpToLibrary: { selection = .libraryBrowser })
         }
     }
 

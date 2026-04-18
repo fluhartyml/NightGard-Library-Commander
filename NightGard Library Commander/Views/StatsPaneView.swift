@@ -7,19 +7,37 @@ import SwiftUI
 
 struct StatsPaneView: View {
     @Environment(LibraryService.self) private var library
+    var onJumpToLibrary: () -> Void = {}
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 HStack(spacing: 12) {
-                    Text("Library Health")
-                        .font(.system(size: 24, weight: .bold))
-                    Image(systemName: healthIcon)
-                        .font(.system(size: 28))
-                        .foregroundStyle(healthColor)
-                    Text(healthLabel)
-                        .font(.system(size: 16))
-                        .foregroundStyle(.secondary)
+                    Button {
+                        onJumpToLibrary()
+                    } label: {
+                        HStack(spacing: 12) {
+                            Text("Library Health")
+                                .font(.system(size: 24, weight: .bold))
+                            Image(systemName: healthIcon)
+                                .font(.system(size: 28))
+                                .foregroundStyle(healthColor)
+                            Text(healthLabel)
+                                .font(.system(size: 16))
+                                .foregroundStyle(.secondary)
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 14))
+                                .foregroundStyle(.tertiary)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    #if os(macOS)
+                    .onHover { hovering in
+                        if hovering { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+                    }
+                    #endif
+
                     Spacer()
                     Button {
                         Task { await library.refreshStats() }
@@ -33,6 +51,12 @@ struct StatsPaneView: View {
                         }
                     }
                     .disabled(library.isWorking)
+                }
+
+                if health == .sad || health == .bored {
+                    Text(suggestedAction)
+                        .font(.system(size: 15))
+                        .foregroundStyle(.secondary)
                 }
 
                 if library.stats.macOnly {
@@ -126,6 +150,17 @@ struct StatsPaneView: View {
         case .bored: "\(metadataGaps.formatted()) metadata gaps"
         case .sad: "\(problemState.formatted()) tracks in problem state"
         case .noData: "Tap Refresh to load stats"
+        }
+    }
+
+    private var suggestedAction: String {
+        switch health {
+        case .sad:
+            "Run Apple Music Scan on your uploaded + problem tracks to identify and fill missing metadata. Shazam only what's still unresolved after that."
+        case .bored:
+            "Run Apple Music Scan to fill missing artist / album / genre fields using the iTunes catalog."
+        default:
+            ""
         }
     }
 
