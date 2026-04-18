@@ -21,8 +21,25 @@ struct LibraryPaneView: View {
                 Button("Refresh") {
                     Task { await library.refreshUploadedTracks() }
                 }
+                .disabled(library.isWorking)
+                Button("Apple Music Scan") {
+                    Task { await library.runAppleMusicScan() }
+                }
+                .disabled(library.isWorking || library.uploadedTracks.isEmpty)
+                Button("Shazam Scan (last resort)") {
+                    Task { await library.runShazamScan() }
+                }
+                .disabled(library.isWorking || library.uploadedTracks.isEmpty)
             }
             .padding()
+
+            if !library.statusMessage.isEmpty {
+                Text(library.statusMessage)
+                    .font(.system(size: 14))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal)
+                    .padding(.bottom, 8)
+            }
 
             #if os(macOS)
             if library.uploadedTracks.isEmpty {

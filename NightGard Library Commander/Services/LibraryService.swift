@@ -120,6 +120,28 @@ final class LibraryService {
         #endif
     }
 
+    // MARK: - Scan Buttons (port pending from NightGard Commander)
+
+    /// Apple Music text search pass. Ports iTunesSearchService from NightGard Commander.
+    /// For each uploaded/problem track: take filename + ID3 → iTunes Search API →
+    /// fill metadata, add Apple Music ID, cover art, save to scan DB.
+    func runAppleMusicScan() async {
+        isWorking = true
+        defer { isWorking = false }
+        statusMessage = "Apple Music Scan: port of iTunesSearchService from NightGard Commander pending. When wired, will run text search against \(uploadedTracks.count) uploaded tracks."
+        try? await Task.sleep(nanoseconds: 600_000_000)
+    }
+
+    /// Last-resort Shazam fingerprint. Ports ShazamService from NightGard Commander.
+    /// Only runs on tracks still missing Apple Music ID after the Apple Music Scan pass.
+    /// Honors 2s throttle between calls and 30s cooldown on rate-limit (error 201).
+    func runShazamScan() async {
+        isWorking = true
+        defer { isWorking = false }
+        statusMessage = "Shazam Scan: port of ShazamService from NightGard Commander pending. When wired, will fingerprint only tracks still missing Apple Music ID after the Apple Music Scan pass."
+        try? await Task.sleep(nanoseconds: 600_000_000)
+    }
+
     // MARK: - AppleScript implementations
 
     #if os(macOS)
