@@ -26,17 +26,31 @@ struct LibraryPaneView: View {
                 Button("Refresh") {
                     Task { await library.refreshUploadedTracks() }
                 }
+                .buttonStyle(.bordered)
                 .disabled(library.isWorking)
-                Button("Apple Music Scan") {
+
+                Button {
                     Task { await library.runAppleMusicScan() }
+                } label: {
+                    Label("Apple Music Scan", systemImage: "bolt.fill")
                 }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
                 .disabled(library.isWorking || library.uploadedTracks.isEmpty)
+
                 Button("Shazam Scan (last resort)") {
                     Task { await library.runShazamScan() }
                 }
+                .buttonStyle(.bordered)
                 .disabled(library.isWorking || library.uploadedTracks.isEmpty)
             }
             .padding()
+
+            Text("Run Apple Music Scan first — text-search against the iTunes catalog fills metadata and attaches Apple Music IDs. Shazam the leftovers only if anything remains unidentified.")
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal)
+                .padding(.bottom, 8)
 
             if !library.statusMessage.isEmpty {
                 Text(library.statusMessage)
