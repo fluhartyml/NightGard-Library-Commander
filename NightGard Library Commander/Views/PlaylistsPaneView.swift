@@ -10,6 +10,10 @@ struct PlaylistsPaneView: View {
     @Environment(LibraryService.self) private var library
     @State private var selection: Set<MusicItemID> = []
     @State private var showingDeleteConfirm = false
+    @State private var editingID: MusicItemID?
+    @State private var editingName: String = ""
+
+    static let visibleCharCount = 20
 
     var body: some View {
         VStack(spacing: 0) {
@@ -29,14 +33,15 @@ struct PlaylistsPaneView: View {
             }
             .padding()
 
+            Text("First \(Self.visibleCharCount) characters shown bold — that's all CryoTunes displays before truncating. Double-click a name to rename.")
+                .font(.system(size: 14))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal)
+                .padding(.bottom, 8)
+
             List(library.playlists, id: \.id, selection: $selection) { playlist in
-                HStack {
-                    Image(systemName: "music.note.list")
-                        .foregroundStyle(.tint)
-                    Text(playlist.name)
-                        .font(.system(size: 18))
-                }
-                .tag(playlist.id)
+                row(for: playlist)
+                    .tag(playlist.id)
             }
         }
         .task {
@@ -62,5 +67,70 @@ struct PlaylistsPaneView: View {
         } message: {
             Text("This removes the playlists from your Apple Music library. The tracks stay.")
         }
+    }
+
+    @ViewBuilder
+    private func row(for playlist: Playlist) -> some View {
+        HStack {
+            Image(systemName: "music.note.list")
+                .foregroundStyle(.tint)
+
+            if editingID == playlist.id {
+                TextField("Name", text: $editingName, onCommit: {
+                    commitRename(from: playlist.name)
+                })
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 18))
+
+                Button("Save") { commitRename(from: playlist.name) }
+                    .keyboardShortcut(.defaultAction)
+                Button("Cancel") { cancelRename() }
+            } else {
+                emphasizedName(playlist.name)
+                    .onTapGesture(count: 2) {
+                        editingID = playlist.id
+                        editingName = playlist.name
+                    }
+            }
+        }
+        .contextMenu {
+            Button("Rename") {
+                editingID = playlist.id
+                editingName = playlist.name
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func emphasizedName(_ name: String) -> some View {
+        let visible = String(name.prefix(Self.visibleCharCount))
+        let overflow = name.count > Self.visibleCharCount ? String(name.dropFirst(Self.visibleCharCount)) : ""
+        HStack(spacing: 0) {
+            Text(visible)
+                .font(.system(size: 18, weight: .bold))
+                .foregroundStyle(.primary)
+            if !overflow.isEmpty {
+                Text(overflow)
+                    .font(.system(size: 18))
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func commitRename(from oldName: String) {
+        let newName = editingName.trimmingCharacters(in: .whitespaces)
+        defer {
+            editingID = nil
+            editingName = ""
+        }
+        guard !newName.isEmpty, newName != oldName else { return }
+        Task {
+            await library.renamePlaylist(oldName: oldName, newName: newName)
+        }
+    }
+
+    private func cancelRename() {
+        editingID = nil
+        editingName = ""
     }
 }

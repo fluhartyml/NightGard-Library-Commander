@@ -66,6 +66,30 @@ final class LibraryService {
         #endif
     }
 
+    func renamePlaylist(oldName: String, newName: String) async {
+        #if os(macOS)
+        let safeOld = oldName.replacingOccurrences(of: "\"", with: "\\\"")
+        let safeNew = newName.replacingOccurrences(of: "\"", with: "\\\"")
+        let script = """
+        tell application "Music"
+            try
+                set name of (first user playlist whose name is "\(safeOld)") to "\(safeNew)"
+                return "ok"
+            on error errMsg
+                return "err: " & errMsg
+            end try
+        end tell
+        """
+        let result = runAppleScript(script) ?? ""
+        if result.hasPrefix("err") {
+            statusMessage = result
+        }
+        await refreshPlaylists()
+        #else
+        statusMessage = "Rename requires macOS for v1"
+        #endif
+    }
+
     // MARK: - Stats
 
     func refreshStats() async {
