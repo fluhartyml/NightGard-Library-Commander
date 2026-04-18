@@ -2,79 +2,96 @@
 //  ContentView.swift
 //  NightGard Library Commander
 //
-//  Created by Michael Fluharty on 4/18/26.
-//
 
 import SwiftUI
-import SwiftData
+import MusicKit
 
 struct ContentView: View {
-    @Environment(\.modelContext) private var modelContext
-    @Query private var items: [Item]
+    @Environment(LibraryService.self) private var library
+    @State private var selection: Pane = .stats
+
+    enum Pane: Hashable, CaseIterable {
+        case playlists, libraryBrowser, locker, stats
+
+        var title: String {
+            switch self {
+            case .playlists: "Playlists"
+            case .libraryBrowser: "Library"
+            case .locker: "Playlist Locker"
+            case .stats: "Stats"
+            }
+        }
+
+        var systemImage: String {
+            switch self {
+            case .playlists: "music.note.list"
+            case .libraryBrowser: "books.vertical"
+            case .locker: "archivebox"
+            case .stats: "chart.bar"
+            }
+        }
+    }
 
     var body: some View {
-        NavigationViewWrapper {
-            List {
-                ForEach(items) { item in
-                    NavigationLink {
-                        Text("Item at \(item.timestamp, format: Date.FormatStyle(date: .numeric, time: .standard))")
-                    } label: {
-                        Text(item.timestamp, format: Date.FormatStyle(date: .numeric, time: .standard))
-                    }
-                }
-                .onDelete(perform: deleteItems)
-            }
-#if os(macOS)
-            .navigationSplitViewColumnWidth(min: 180, ideal: 200)
-#endif
-            .toolbar {
-#if os(iOS)
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    EditButton()
-                }
-#endif
-                ToolbarItem {
-                    Button(action: addItem) {
-                        Label("Add Item", systemImage: "plus")
-                    }
-                }
-            }
-        }
-    }
-
-    private func addItem() {
-        withAnimation {
-            let newItem = Item(timestamp: Date())
-            modelContext.insert(newItem)
-        }
-    }
-
-    private func deleteItems(offsets: IndexSet) {
-        withAnimation {
-            for index in offsets {
-                modelContext.delete(items[index])
-            }
-        }
-    }
-}
-
-fileprivate struct NavigationViewWrapper<Content: View>: View {
-    let content: () -> Content
-
-    var body: some View {
-#if os(macOS)
         NavigationSplitView {
-            content()
+            List(Pane.allCases, id: \.self, selection: $selection) { pane in
+                Label(pane.title, systemImage: pane.systemImage)
+                    .font(.system(size: 18))
+                    .tag(pane)
+            }
+            .navigationTitle("NightGard")
+            #if os(macOS)
+            .navigationSplitViewColumnWidth(min: 200, ideal: 220)
+            #endif
         } detail: {
-            Text("Select an item")
+            detailPane(for: selection)
+                .navigationTitle(selection.title)
         }
-#else
-        content()
-#endif
+        .overlay(alignment: .top) {
+            if library.authorizationStatus != .authorized {
+                authorizationBanner
+                    .padding()
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func detailPane(for pane: Pane) -> some View {
+        switch pane {
+        case .playlists: PlaylistsPaneView()
+        case .libraryBrowser: LibraryPaneView()
+        case .locker: LockerPaneView()
+        case .stats: StatsPaneView()
+        }
+    }
+
+    private var authorizationBanner: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "lock.fill")
+            Text("Apple Music access required. Status: \(authorizationText)")
+                .font(.system(size: 18))
+            Spacer()
+            Button("Request Access") {
+                Task { await library.authorize() }
+            }
+        }
+        .padding()
+        .background(.thickMaterial, in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private var authorizationText: String {
+        switch library.authorizationStatus {
+        case .authorized: "Authorized"
+        case .denied: "Denied (enable in Settings)"
+        case .restricted: "Restricted"
+        case .notDetermined: "Not yet asked"
+        @unknown default: "Unknown"
+        }
     }
 }
 
 #Preview {
     ContentView()
-        .modelContainer(for: Item.self, inMemory: true)
+        .environment(LibraryService())
+        .environment(PlaylistLockerService())
 }

@@ -6,5 +6,21 @@
 	<array>
 		<string>remote-notification</string>
 	</array>
+	<key>NSAppleMusicUsageDescription</key>
+	<string>NightGard Library Commander reads and organizes your Apple Music library — playlists, tracks, and metadata — so you can clean up sprawl and back up playlists.</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>NightGard Library Commander uses AppleScript to read and organize your Apple Music library (track metadata, cloud status, playlist cleanup).</string>
+	<key>NSUbiquitousContainers</key>
+	<dict>
+		<key>iCloud.com.NightGard.NightGard-Library-Commander</key>
+		<dict>
+			<key>NSUbiquitousContainerIsDocumentScopePublic</key>
+			<true/>
+			<key>NSUbiquitousContainerSupportedFolderLevels</key>
+			<string>Any</string>
+			<key>NSUbiquitousContainerName</key>
+			<string>NightGard Library Commander</string>
+		</dict>
+	</dict>
 </dict>
 </plist>
