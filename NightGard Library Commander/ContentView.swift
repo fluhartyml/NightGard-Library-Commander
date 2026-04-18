@@ -48,7 +48,7 @@ struct ContentView: View {
                 .navigationTitle(selection.title)
         }
         .overlay(alignment: .top) {
-            if library.authorizationStatus != .authorized {
+            if library.authorizationStatus == .denied || library.authorizationStatus == .restricted {
                 authorizationBanner
                     .padding()
             }
