@@ -149,7 +149,10 @@ final class LibraryService {
         NSLog("NightGard: runAppleScriptStats start")
         ensureMusicRunning()
         let script = """
-        tell application "Music"
+        launch application "Music"
+        delay 0.5
+        tell application id "com.apple.Music"
+            activate
             set t to count of tracks
             set p to count of playlists
             set noArtist to count of (every track of library playlist 1 whose artist is "")

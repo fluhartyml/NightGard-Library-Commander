@@ -33,7 +33,7 @@ struct PlaylistsPaneView: View {
             }
             .padding()
 
-            Text("First \(Self.visibleCharCount) characters shown bold — that's all CryoTunes displays before truncating. Double-click a name to rename.")
+            Text("First \(Self.visibleCharCount) characters shown bold — that's the practical display limit before most music apps truncate. Double-click a name to rename.")
                 .font(.system(size: 14))
                 .foregroundStyle(.secondary)
                 .padding(.horizontal)
