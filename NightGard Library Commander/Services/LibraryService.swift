@@ -124,6 +124,7 @@ final class LibraryService {
 
     #if os(macOS)
     private func runAppleScriptStats() -> LibraryStats {
+        NSLog("NightGard: runAppleScriptStats start")
         let script = """
         tell application "Music"
             set t to count of tracks
@@ -138,9 +139,17 @@ final class LibraryService {
             return (t as text) & "," & (p as text) & "," & (m as text) & "," & (pp as text) & "," & (u as text) & "," & (sub as text) & "," & (noArtist as text) & "," & (noAlbum as text) & "," & (noGenre as text)
         end tell
         """
-        guard let result = runAppleScript(script) else { return .empty }
+        guard let result = runAppleScript(script) else {
+            NSLog("NightGard: runAppleScriptStats -> runAppleScript returned nil")
+            return .empty
+        }
+        NSLog("NightGard: AppleScript result: '%@'", result)
         let parts = result.split(separator: ",").map { Int($0.trimmingCharacters(in: .whitespaces)) ?? 0 }
-        guard parts.count >= 9 else { return .empty }
+        NSLog("NightGard: parsed parts count=%d values=%@", parts.count, parts)
+        guard parts.count >= 9 else {
+            statusMessage = "AppleScript returned \(parts.count) fields, expected 9. Raw: '\(result)'"
+            return .empty
+        }
         return LibraryStats(
             totalTracks: parts[0],
             totalPlaylists: parts[1],
@@ -187,16 +196,20 @@ final class LibraryService {
     private func runAppleScript(_ source: String) -> String? {
         var error: NSDictionary?
         guard let script = NSAppleScript(source: source) else {
+            NSLog("NightGard: NSAppleScript init failed")
             statusMessage = "NSAppleScript init failed"
             return nil
         }
+        NSLog("NightGard: executing AppleScript…")
         let descriptor = script.executeAndReturnError(&error)
         if let err = error {
             let num = err[NSAppleScript.errorNumber] ?? "?"
             let msg = err[NSAppleScript.errorMessage] ?? "(no message)"
+            NSLog("NightGard: AppleScript error %@: %@", "\(num)", "\(msg)")
             statusMessage = "AppleScript error \(num): \(msg)"
             return nil
         }
+        NSLog("NightGard: AppleScript descriptor type=%u stringValue=%@", descriptor.descriptorType, descriptor.stringValue ?? "nil")
         if let result = descriptor.stringValue {
             statusMessage = ""
             return result
