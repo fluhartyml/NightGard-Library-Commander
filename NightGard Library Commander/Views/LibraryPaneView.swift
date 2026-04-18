@@ -36,20 +36,21 @@ struct LibraryPaneView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
-                .disabled(library.isWorking || library.uploadedTracks.isEmpty)
+                .disabled(library.isWorking || library.uploadedTracksTotal == 0)
 
                 Button {
                     Task { await library.runShazamScan() }
                 } label: {
                     Label {
-                        Text("Shazam Scan (last resort)")
+                        Text("Shazam Scan (pending)")
                     } icon: {
                         Image(systemName: "shazam.logo.fill")
                             .foregroundStyle(.blue)
                     }
                 }
                 .buttonStyle(.bordered)
-                .disabled(library.isWorking || library.uploadedTracks.isEmpty)
+                .help("Shazam Scan is not yet implemented — port of ShazamService from NightGard Commander is next.")
+                .disabled(true)
             }
             .padding()
 

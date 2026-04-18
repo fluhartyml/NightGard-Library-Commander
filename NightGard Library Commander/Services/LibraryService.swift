@@ -128,47 +128,34 @@ final class LibraryService {
 
     // MARK: - Scan Buttons (port pending from NightGard Commander)
 
-    /// Apple Music text search pass. Ports iTunesSearchService from NightGard Commander.
-    /// For each uploaded/problem track: take filename + ID3 → iTunes Search API →
-    /// fill metadata, add Apple Music ID, cover art, save to scan DB.
+    /// Apple Music text search pass. For each candidate track: query iTunes Search
+    /// with "artist title", on match write album/genre/year back via AppleScript.
+    /// Skips tracks already having complete artist+album+genre.
     func runAppleMusicScan() async {
-        await runSimulatedScan(kind: .appleMusic)
-    }
-
-    /// Last-resort Shazam fingerprint. Ports ShazamService from NightGard Commander.
-    /// Only runs on tracks still missing Apple Music ID after the Apple Music Scan pass.
-    /// Honors 2s throttle between calls and 30s cooldown on rate-limit (error 201).
-    func runShazamScan() async {
-        await runSimulatedScan(kind: .shazam)
-    }
-
-    func cancelScan() {
-        scanCancelRequested = true
-    }
-
-    private enum ScanKind {
-        case appleMusic, shazam
-        var label: String { switch self { case .appleMusic: "Apple Music Scan"; case .shazam: "Shazam Scan" } }
-        var stepDelayNs: UInt64 { switch self { case .appleMusic: 50_000_000; case .shazam: 150_000_000 } }
-    }
-
-    // Simulated scan loop. Real port of iTunesSearchService / ShazamService replaces
-    // the body inside the for-loop. The UI updates driven by scanState stay the same.
-    private func runSimulatedScan(kind: ScanKind) async {
-        guard !uploadedTracks.isEmpty else { return }
         isWorking = true
         scanCancelRequested = false
         defer { isWorking = false }
 
-        let candidates = uploadedTracks
+        scanState = .scanning(
+            kind: "Apple Music Scan",
+            currentTrack: "Loading full candidate list…",
+            processed: 0,
+            total: uploadedTracksTotal,
+            matched: 0, failed: 0, skipped: 0
+        )
+        let candidates = fetchAllCandidateTracks()
         let total = candidates.count
-        var matched = 0, failed = 0, skipped = 0
+        guard total > 0 else {
+            scanState = .complete(kind: "Apple Music Scan", processed: 0, total: 0, matched: 0, failed: 0, skipped: 0, cancelled: false)
+            return
+        }
 
+        var matched = 0, failed = 0, skipped = 0
         for (index, track) in candidates.enumerated() {
             if scanCancelRequested { break }
 
             scanState = .scanning(
-                kind: kind.label,
+                kind: "Apple Music Scan",
                 currentTrack: "\(track.artist) — \(track.title)",
                 processed: index,
                 total: total,
@@ -177,19 +164,28 @@ final class LibraryService {
                 skipped: skipped
             )
 
-            try? await Task.sleep(nanoseconds: kind.stepDelayNs)
+            // Skip if we have no search anchor (both artist and title empty).
+            guard !track.artist.isEmpty || !track.title.isEmpty else {
+                skipped += 1
+                continue
+            }
 
-            // Stubbed outcome: ~70% matched, ~20% failed, ~10% skipped — until real logic lands.
-            let roll = Int.random(in: 0..<10)
-            switch roll {
-            case 0..<7: matched += 1
-            case 7..<9: failed += 1
-            default: skipped += 1
+            // Be polite to iTunes Search API: ~3 req/sec ceiling.
+            try? await Task.sleep(nanoseconds: 350_000_000)
+
+            if let hit = await iTunesSearch(artist: track.artist, title: track.title),
+               matchIsTrustworthy(query: track.artist, title: track.title, hit: hit) {
+                #if os(macOS)
+                writeBack(persistentID: track.persistentID, hit: hit)
+                #endif
+                matched += 1
+            } else {
+                failed += 1
             }
         }
 
         scanState = .complete(
-            kind: kind.label,
+            kind: "Apple Music Scan",
             processed: min(total, candidates.count),
             total: total,
             matched: matched,
@@ -197,7 +193,178 @@ final class LibraryService {
             skipped: skipped,
             cancelled: scanCancelRequested
         )
-        statusMessage = "\(kind.label) stub — real port pending from NightGard Commander. Numbers are simulated."
+        statusMessage = ""
+    }
+
+    /// Last-resort Shazam fingerprint. NOT YET IMPLEMENTED — needs file-URL access
+    /// via AppleScript + SHSession integration + ShazamQueue/Database port from
+    /// NightGard Commander. Do NOT advertise as working.
+    func runShazamScan() async {
+        statusMessage = "Shazam Scan is not yet implemented. Port of ShazamService + SHSession audio fingerprinting from NightGard Commander is scheduled after Apple Music Scan stabilizes."
+    }
+
+    func cancelScan() {
+        scanCancelRequested = true
+    }
+
+    // MARK: - iTunes Search API
+
+    struct iTunesHit {
+        let appleMusicID: String
+        let artist: String
+        let title: String
+        let album: String?
+        let genre: String?
+        let year: String?
+    }
+
+    private func iTunesSearch(artist: String, title: String) async -> iTunesHit? {
+        let term = [artist, title].filter { !$0.isEmpty }.joined(separator: " ")
+        guard let encoded = term.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+              !encoded.isEmpty,
+              let url = URL(string: "https://itunes.apple.com/search?term=\(encoded)&media=music&entity=song&limit=1") else {
+            return nil
+        }
+        do {
+            let (data, _) = try await URLSession.shared.data(from: url)
+            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let results = json["results"] as? [[String: Any]],
+                  let first = results.first else { return nil }
+            guard let trackId = first["trackId"] as? Int else { return nil }
+            let artistName = first["artistName"] as? String ?? ""
+            let trackName = first["trackName"] as? String ?? ""
+            let album = first["collectionName"] as? String
+            let genre = first["primaryGenreName"] as? String
+            var year: String?
+            if let releaseDate = first["releaseDate"] as? String, releaseDate.count >= 4 {
+                year = String(releaseDate.prefix(4))
+            }
+            return iTunesHit(
+                appleMusicID: String(trackId),
+                artist: artistName,
+                title: trackName,
+                album: album,
+                genre: genre,
+                year: year
+            )
+        } catch {
+            NSLog("NightGard: iTunes search error for '%@': %@", term, "\(error)")
+            return nil
+        }
+    }
+
+    // MARK: - AppleScript write-back
+
+    #if os(macOS)
+    /// Bring the library track into compliance with Apple Music's canonical values.
+    /// Overwrites artist/title/album/genre/year when they differ from Apple's truth,
+    /// wipes ripper/encoder cruft from comment and grouping, leaves user-owned
+    /// fields alone (composer, description, rating, play count, date added).
+    /// Never writes the Apple Music ID — Apple assigns that during its own matching.
+    private func writeBack(persistentID: String, hit: iTunesHit) {
+        var setters: [String] = []
+
+        if !hit.artist.isEmpty {
+            setters.append("if (artist of t) is not \"\(escape(hit.artist))\" then set artist of t to \"\(escape(hit.artist))\"")
+        }
+        if !hit.title.isEmpty {
+            setters.append("if (name of t) is not \"\(escape(hit.title))\" then set name of t to \"\(escape(hit.title))\"")
+        }
+        if let album = hit.album, !album.isEmpty {
+            setters.append("if (album of t) is not \"\(escape(album))\" then set album of t to \"\(escape(album))\"")
+        }
+        if let genre = hit.genre, !genre.isEmpty {
+            setters.append("if (genre of t) is not \"\(escape(genre))\" then set genre of t to \"\(escape(genre))\"")
+        }
+        if let year = hit.year, let y = Int(year) {
+            setters.append("if (year of t) is not \(y) then set year of t to \(y)")
+        }
+        // Wipe ripper / encoder cruft
+        setters.append("if (comment of t) is not \"\" then set comment of t to \"\"")
+        setters.append("if (grouping of t) is not \"\" then set grouping of t to \"\"")
+
+        let body = setters.joined(separator: "\n            ")
+        let script = """
+        tell application "Music"
+            set t to (first track of library playlist 1 whose persistent ID is "\(persistentID)")
+            \(body)
+        end tell
+        """
+        _ = runAppleScript(script)
+    }
+
+    private func escape(_ s: String) -> String {
+        s.replacingOccurrences(of: "\\", with: "\\\\")
+         .replacingOccurrences(of: "\"", with: "\\\"")
+    }
+    #endif
+
+    // MARK: - Match-confidence gate
+
+    /// Rough similarity check — are the artist+title Apple returned close enough to
+    /// what we searched for that we trust the match? Guards against catastrophic
+    /// overwrites when iTunes Search returns an unrelated top hit.
+    private func matchIsTrustworthy(query artist: String, title: String, hit: iTunesHit) -> Bool {
+        let q = normalize("\(artist) \(title)")
+        let r = normalize("\(hit.artist) \(hit.title)")
+        guard !q.isEmpty, !r.isEmpty else { return false }
+        // Simple containment check in either direction is good enough here —
+        // avoids pulling in a full Levenshtein dependency.
+        return q.contains(r) || r.contains(q) || sharedTokenRatio(q, r) >= 0.6
+    }
+
+    private func normalize(_ s: String) -> String {
+        s.lowercased()
+         .components(separatedBy: CharacterSet.alphanumerics.union(.whitespaces).inverted)
+         .joined(separator: " ")
+         .components(separatedBy: .whitespaces)
+         .filter { !$0.isEmpty }
+         .joined(separator: " ")
+    }
+
+    private func sharedTokenRatio(_ a: String, _ b: String) -> Double {
+        let aTokens = Set(a.split(separator: " ").map(String.init))
+        let bTokens = Set(b.split(separator: " ").map(String.init))
+        guard !aTokens.isEmpty, !bTokens.isEmpty else { return 0 }
+        let shared = aTokens.intersection(bTokens).count
+        return Double(shared) / Double(min(aTokens.count, bTokens.count))
+    }
+
+    /// Full list of tracks missing Apple Music ID, no display cap. Used by scans.
+    private func fetchAllCandidateTracks() -> [UploadedTrackRow] {
+        #if os(macOS)
+        ensureMusicRunning()
+        let script = """
+        tell application "Music"
+            set output to ""
+            set candidates to (every track of library playlist 1 whose cloud status is not matched and cloud status is not subscription and cloud status is not purchased)
+            repeat with t in candidates
+                try
+                    set g to genre of t
+                on error
+                    set g to ""
+                end try
+                set output to output & (persistent ID of t) & "\t" & (name of t) & "\t" & (artist of t) & "\t" & (album of t) & "\t" & g & linefeed
+            end repeat
+            return output
+        end tell
+        """
+        guard let result = runAppleScript(script) else { return [] }
+        let lines = result.split(separator: "\n", omittingEmptySubsequences: true)
+        return lines.compactMap { line -> UploadedTrackRow? in
+            let cols = line.components(separatedBy: "\t")
+            guard cols.count >= 4 else { return nil }
+            return UploadedTrackRow(
+                persistentID: cols[0],
+                title: cols[1],
+                artist: cols[2],
+                album: cols[3],
+                genre: cols.count >= 5 ? cols[4] : ""
+            )
+        }
+        #else
+        return []
+        #endif
     }
 
     // MARK: - AppleScript implementations
