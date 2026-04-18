@@ -11,13 +11,28 @@ struct StatsPaneView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                HStack {
+                HStack(spacing: 12) {
                     Text("Library Health")
                         .font(.system(size: 24, weight: .bold))
+                    Image(systemName: healthIcon)
+                        .font(.system(size: 28))
+                        .foregroundStyle(healthColor)
+                    Text(healthLabel)
+                        .font(.system(size: 16))
+                        .foregroundStyle(.secondary)
                     Spacer()
-                    Button("Refresh") {
+                    Button {
                         Task { await library.refreshStats() }
+                    } label: {
+                        HStack(spacing: 6) {
+                            if library.isWorking {
+                                ProgressView()
+                                    .controlSize(.small)
+                            }
+                            Text("Refresh")
+                        }
                     }
+                    .disabled(library.isWorking)
                 }
 
                 if library.stats.macOnly {
@@ -50,12 +65,67 @@ struct StatsPaneView: View {
                 }
 
                 if !library.statusMessage.isEmpty {
-                    Text(library.statusMessage)
-                        .font(.system(size: 14))
-                        .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Last message")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                        Text(library.statusMessage)
+                            .font(.system(size: 14))
+                            .foregroundStyle(.red)
+                            .textSelection(.enabled)
+                    }
+                    .padding()
+                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
                 }
             }
             .padding()
+        }
+    }
+
+    // MARK: - Health classification
+
+    private enum Health { case happy, bored, sad, noData }
+
+    private var problemState: Int {
+        let accounted = library.stats.matched + library.stats.subscription + library.stats.purchased + library.stats.uploaded
+        return max(0, library.stats.totalTracks - accounted)
+    }
+
+    private var metadataGaps: Int {
+        library.stats.missingArtist + library.stats.missingAlbum + library.stats.missingGenre
+    }
+
+    private var health: Health {
+        if library.stats.totalTracks == 0 { return .noData }
+        if problemState > 0 { return .sad }
+        if metadataGaps > 0 { return .bored }
+        return .happy
+    }
+
+    private var healthIcon: String {
+        switch health {
+        case .happy: "hand.thumbsup.fill"
+        case .bored: "minus.circle.fill"
+        case .sad: "hand.thumbsdown.fill"
+        case .noData: "questionmark.circle.fill"
+        }
+    }
+
+    private var healthColor: Color {
+        switch health {
+        case .happy: .green
+        case .bored: .yellow
+        case .sad: .red
+        case .noData: .gray
+        }
+    }
+
+    private var healthLabel: String {
+        switch health {
+        case .happy: "Clean"
+        case .bored: "\(metadataGaps.formatted()) metadata gaps"
+        case .sad: "\(problemState.formatted()) tracks in problem state"
+        case .noData: "Tap Refresh to load stats"
         }
     }
 

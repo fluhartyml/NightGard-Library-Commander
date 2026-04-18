@@ -93,6 +93,8 @@ final class LibraryService {
     // MARK: - Stats
 
     func refreshStats() async {
+        isWorking = true
+        defer { isWorking = false }
         #if os(macOS)
         stats = runAppleScriptStats()
         #else
@@ -109,6 +111,8 @@ final class LibraryService {
     // MARK: - Uploaded Tracks (macOS only for v1)
 
     func refreshUploadedTracks() async {
+        isWorking = true
+        defer { isWorking = false }
         #if os(macOS)
         uploadedTracks = runAppleScriptUploadedTracks()
         #else
