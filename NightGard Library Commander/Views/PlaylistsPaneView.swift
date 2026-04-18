@@ -71,20 +71,28 @@ struct PlaylistsPaneView: View {
 
     @ViewBuilder
     private func row(for playlist: Playlist) -> some View {
-        HStack {
+        HStack(alignment: .top) {
             Image(systemName: "music.note.list")
                 .foregroundStyle(.tint)
+                .padding(.top, 2)
 
             if editingID == playlist.id {
-                TextField("Name", text: $editingName, onCommit: {
-                    commitRename(from: playlist.name)
-                })
-                .textFieldStyle(.roundedBorder)
-                .font(.system(size: 18))
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        TextField("Name", text: $editingName, onCommit: {
+                            commitRename(from: playlist.name)
+                        })
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 18))
 
-                Button("Save") { commitRename(from: playlist.name) }
-                    .keyboardShortcut(.defaultAction)
-                Button("Cancel") { cancelRename() }
+                        Button("Save") { commitRename(from: playlist.name) }
+                            .keyboardShortcut(.defaultAction)
+                        Button("Cancel") { cancelRename() }
+                    }
+                    emphasizedName(editingName)
+                        .opacity(0.8)
+                    charCountIndicator(for: editingName)
+                }
             } else {
                 emphasizedName(playlist.name)
                     .onTapGesture(count: 2) {
@@ -97,6 +105,31 @@ struct PlaylistsPaneView: View {
             Button("Rename") {
                 editingID = playlist.id
                 editingName = playlist.name
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func charCountIndicator(for text: String) -> some View {
+        let count = text.count
+        let overflow = max(0, count - Self.visibleCharCount)
+        HStack(spacing: 6) {
+            Text("\(count) chars")
+                .font(.system(size: 13, design: .monospaced))
+                .foregroundStyle(count > Self.visibleCharCount ? .red : .secondary)
+            Text("•")
+                .foregroundStyle(.secondary)
+            Text("truncates at \(Self.visibleCharCount)")
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary)
+            if overflow > 0 {
+                Text("(\(overflow) over)")
+                    .font(.system(size: 13, design: .monospaced))
+                    .foregroundStyle(.red)
+            } else if count == Self.visibleCharCount {
+                Text("(at limit)")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.orange)
             }
         }
     }
