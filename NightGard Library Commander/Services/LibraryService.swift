@@ -483,49 +483,58 @@ final class LibraryService {
     }
 
     /// Full list of tracks missing Apple Music ID, no display cap. Used by scans.
-    /// Uses AppleScript list-property fetch (one round-trip per property) instead of
-    /// per-track iteration, which would be minutes-long on ~12k tracks.
+    /// Uses AppleScript's `property of every X whose Y` bulk syntax — one round trip
+    /// per property, cleanly handles ghost track references per-try.
     private func fetchAllCandidateTracks() -> [UploadedTrackRow] {
         #if os(macOS)
         ensureMusicRunning()
         let sep = "‖"  // double vertical bar — unlikely in track metadata
+        let filter = "cloud status is not matched and cloud status is not subscription and cloud status is not purchased"
         let script = """
         tell application "Music"
-            set candidates to (every track of library playlist 1 whose cloud status is not matched and cloud status is not subscription and cloud status is not purchased)
-            if (count of candidates) is 0 then return ""
-            set idList to (get persistent ID of candidates)
-            set nameList to (get name of candidates)
-            set artistList to (get artist of candidates)
-            set albumList to (get album of candidates)
-            set genreList to (get genre of candidates)
             set AppleScript's text item delimiters to "\(sep)"
-            set idBlob to idList as text
-            set nameBlob to nameList as text
-            set artistBlob to artistList as text
-            set albumBlob to albumList as text
-            set genreBlob to genreList as text
+            set idBlob to ""
+            set nameBlob to ""
+            set artistBlob to ""
+            set albumBlob to ""
+            set genreBlob to ""
+            try
+                set idBlob to ((persistent ID of every track of library playlist 1 whose \(filter)) as text)
+            end try
+            try
+                set nameBlob to ((name of every track of library playlist 1 whose \(filter)) as text)
+            end try
+            try
+                set artistBlob to ((artist of every track of library playlist 1 whose \(filter)) as text)
+            end try
+            try
+                set albumBlob to ((album of every track of library playlist 1 whose \(filter)) as text)
+            end try
+            try
+                set genreBlob to ((genre of every track of library playlist 1 whose \(filter)) as text)
+            end try
             set AppleScript's text item delimiters to ""
             return idBlob & "§" & nameBlob & "§" & artistBlob & "§" & albumBlob & "§" & genreBlob
         end tell
         """
-        guard let result = runAppleScript(script), !result.isEmpty else { return [] }
+        guard let result = runAppleScript(script) else { return [] }
         let columns = result.components(separatedBy: "§")
         guard columns.count >= 5 else { return [] }
-        let ids = columns[0].components(separatedBy: sep)
+        let ids = columns[0].isEmpty ? [] : columns[0].components(separatedBy: sep)
+        guard !ids.isEmpty else { return [] }
         let names = columns[1].components(separatedBy: sep)
         let artists = columns[2].components(separatedBy: sep)
         let albums = columns[3].components(separatedBy: sep)
         let genres = columns[4].components(separatedBy: sep)
-        let n = min(ids.count, names.count, artists.count, albums.count, genres.count)
         var rows: [UploadedTrackRow] = []
-        rows.reserveCapacity(n)
-        for i in 0..<n {
+        rows.reserveCapacity(ids.count)
+        for i in 0..<ids.count {
             rows.append(UploadedTrackRow(
                 persistentID: ids[i],
-                title: names[i],
-                artist: artists[i],
-                album: albums[i],
-                genre: genres[i]
+                title: i < names.count ? names[i] : "",
+                artist: i < artists.count ? artists[i] : "",
+                album: i < albums.count ? albums[i] : "",
+                genre: i < genres.count ? genres[i] : ""
             ))
         }
         return rows
