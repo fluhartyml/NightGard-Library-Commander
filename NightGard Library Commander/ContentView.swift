@@ -95,7 +95,10 @@ struct ContentView: View {
         case .playlists: PlaylistsPaneView()
         case .libraryBrowser: LibraryPaneView()
         case .locker: LockerPaneView()
-        case .stats: StatsPaneView(onJumpToLibrary: { selection = .libraryBrowser })
+        case .stats: StatsPaneView(onJumpToLibrary: {
+            selection = .libraryBrowser
+            Task { await library.refreshUploadedTracks() }
+        })
         }
     }
 

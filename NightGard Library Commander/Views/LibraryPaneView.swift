@@ -62,6 +62,8 @@ struct LibraryPaneView: View {
 
             scanBanner
 
+            refreshingBanner
+
             if !library.statusMessage.isEmpty {
                 Text(library.statusMessage)
                     .font(.system(size: 14))
@@ -118,6 +120,25 @@ struct LibraryPaneView: View {
                 await library.refreshUploadedTracks()
             }
             #endif
+        }
+    }
+
+    @ViewBuilder
+    private var refreshingBanner: some View {
+        if library.isWorking, case .idle = library.scanState, !library.uploadedTracks.isEmpty {
+            HStack(spacing: 10) {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Refreshing track list…")
+                    .font(.system(size: 14))
+                    .foregroundStyle(.secondary)
+                Spacer()
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+            .padding(.horizontal)
+            .padding(.bottom, 8)
         }
     }
 
