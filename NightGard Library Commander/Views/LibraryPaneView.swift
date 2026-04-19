@@ -32,10 +32,23 @@ struct LibraryPaneView: View {
                 Button {
                     Task { await library.runAppleMusicScan() }
                 } label: {
-                    Label("Apple Music Scan", systemImage: "bolt.fill")
+                    HStack(spacing: 6) {
+                        Image(systemName: "bolt.fill")
+                            .foregroundStyle(.white)
+                        Text("Apple Music Scan")
+                            .fontWeight(.semibold)
+                            .foregroundStyle(.white)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(Color.blue, in: RoundedRectangle(cornerRadius: 6))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(Color.blue.opacity(0.8), lineWidth: 1)
+                    )
+                    .opacity((library.isWorking || library.uploadedTracksTotal == 0) ? 0.45 : 1.0)
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
+                .buttonStyle(.plain)
                 .disabled(library.isWorking || library.uploadedTracksTotal == 0)
 
                 Button {
@@ -129,7 +142,7 @@ struct LibraryPaneView: View {
             HStack(spacing: 10) {
                 ProgressView()
                     .controlSize(.small)
-                Text("Refreshing track list…")
+                Text("One moment please…")
                     .font(.system(size: 14))
                     .foregroundStyle(.secondary)
                 Spacer()
