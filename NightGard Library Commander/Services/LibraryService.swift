@@ -307,6 +307,14 @@ final class LibraryService {
         if let data = UserDefaults.standard.data(forKey: Self.mediaFolderBookmarkKey) {
             var stale = false
             if let url = try? URL(resolvingBookmarkData: data, options: [.withSecurityScope], relativeTo: nil, bookmarkDataIsStale: &stale) {
+                // If the user deleted the folder but the drive/volume is still mounted,
+                // recreate it so scans keep working without re-prompting.
+                if !FileManager.default.fileExists(atPath: url.path) {
+                    if url.startAccessingSecurityScopedResource() {
+                        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+                        url.stopAccessingSecurityScopedResource()
+                    }
+                }
                 if stale {
                     // Refresh the bookmark so it keeps resolving on future launches.
                     if url.startAccessingSecurityScopedResource() {
@@ -316,7 +324,11 @@ final class LibraryService {
                         }
                     }
                 }
-                return url
+                // Only return the URL if the folder is actually usable. If recreate
+                // failed (drive unmounted, etc.), fall through and prompt.
+                if FileManager.default.fileExists(atPath: url.path) {
+                    return url
+                }
             }
         }
         // No bookmark (or it failed to resolve) — prompt the user.
