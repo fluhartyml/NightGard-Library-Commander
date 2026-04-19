@@ -21,5 +21,8 @@ struct NightGard_Library_CommanderApp: App {
                     await libraryService.refreshStats()
                 }
         }
+        #if os(macOS)
+        .defaultSize(width: 900, height: 720)
+        #endif
     }
 }

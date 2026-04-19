@@ -148,15 +148,16 @@ final class LibraryService {
         }
 
         #if os(macOS)
-        let holdingFolder: URL
+        let scanFolders: ScanFolders
         do {
-            holdingFolder = try createHoldingFolder()
+            scanFolders = try createScanFolders()
         } catch {
-            statusMessage = "Could not create holding folder: \(error.localizedDescription)"
+            statusMessage = "Could not create working folders: \(error.localizedDescription)"
             scanState = .complete(kind: "Apple Music Scan", processed: 0, total: 0, matched: 0, failed: 0, skipped: 0, needsDownload: 0, cancelled: false)
             return
         }
-        NSLog("NightGard: holding folder = %@", holdingFolder.path)
+        NSLog("NightGard: Holding = %@", scanFolders.holding.path)
+        NSLog("NightGard: Cleaned = %@", scanFolders.cleaned.path)
         #endif
 
         scanState = .scanning(
@@ -216,9 +217,9 @@ final class LibraryService {
             // 1a. Write Apple's canonical metadata to the live library track — Music
             //     writes these through to the underlying audio file.
             writeBack(persistentID: track.persistentID, hit: hit)
-            // 1b. Copy the file into the holding folder with canonical name.
+            // 1b. Copy the file into the Holding folder with canonical name.
             let filename = canonicalFilename(hit: hit, sourceExtension: sourceURL.pathExtension)
-            let destURL = holdingFolder.appendingPathComponent(filename)
+            let destURL = scanFolders.holding.appendingPathComponent(filename)
             do {
                 if !FileManager.default.fileExists(atPath: destURL.path) {
                     try FileManager.default.copyItem(at: sourceURL, to: destURL)
@@ -234,7 +235,8 @@ final class LibraryService {
             matched += 1
         }
 
-        // 2. Post-scan: create the cleaned playlist and re-import every holding file.
+        // 2. Post-scan: reimport Holding/ files into the Cleaned playlist, then
+        //    migrate each file from Holding/ → Cleaned/ (state transition).
         #if os(macOS)
         if matched > 0 && !scanCancelRequested {
             let playlistName = "Cleaned NightGard Library Commander"
@@ -252,7 +254,7 @@ final class LibraryService {
 
             scanState = .scanning(
                 kind: "Apple Music Scan",
-                currentTrack: "Re-importing cleaned files into \(playlistName)…",
+                currentTrack: "Re-importing files into \(playlistName)…",
                 processed: total,
                 total: total,
                 matched: matched,
@@ -260,7 +262,20 @@ final class LibraryService {
                 skipped: skipped,
                 needsDownload: needsDownload
             )
-            addFilesInFolderToPlaylist(folder: holdingFolder, playlist: playlistName)
+            addFilesInFolderToPlaylist(folder: scanFolders.holding, playlist: playlistName)
+
+            // Migrate files Holding/ → Cleaned/ now that they've been imported.
+            scanState = .scanning(
+                kind: "Apple Music Scan",
+                currentTrack: "Moving imported files to Cleaned/…",
+                processed: total,
+                total: total,
+                matched: matched,
+                failed: failed,
+                skipped: skipped,
+                needsDownload: needsDownload
+            )
+            migrateFolderContents(from: scanFolders.holding, to: scanFolders.cleaned)
         }
         #endif
 
@@ -319,18 +334,29 @@ final class LibraryService {
         return picked
     }
 
-    private func createHoldingFolder() throws -> URL {
+    struct ScanFolders {
+        let holding: URL    // transient: files during scan
+        let cleaned: URL    // archive: files after successful reimport
+        let quarantine: URL // rejects: files that failed all identification (future use)
+    }
+
+    private func createScanFolders() throws -> ScanFolders {
         let mediaFolder = try resolveMediaFolder()
         guard mediaFolder.startAccessingSecurityScopedResource() else {
             throw LockerError.noiCloud
         }
         activeMediaFolderAccess = mediaFolder
-        let root = mediaFolder.appendingPathComponent("NightGard Library Commander - Cleaned", isDirectory: true)
+        let root = mediaFolder.appendingPathComponent("NightGard Library Commander", isDirectory: true)
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd HHmm"
         let dated = root.appendingPathComponent(formatter.string(from: Date()), isDirectory: true)
-        try FileManager.default.createDirectory(at: dated, withIntermediateDirectories: true)
-        return dated
+        let holding = dated.appendingPathComponent("Holding", isDirectory: true)
+        let cleaned = dated.appendingPathComponent("Cleaned", isDirectory: true)
+        let quarantine = dated.appendingPathComponent("Quarantine", isDirectory: true)
+        try FileManager.default.createDirectory(at: holding, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: cleaned, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: quarantine, withIntermediateDirectories: true)
+        return ScanFolders(holding: holding, cleaned: cleaned, quarantine: quarantine)
     }
 
     private func releaseMediaFolderAccess() {
@@ -392,6 +418,22 @@ final class LibraryService {
         end tell
         """
         _ = runAppleScript(script)
+    }
+
+    private func migrateFolderContents(from source: URL, to destination: URL) {
+        let fm = FileManager.default
+        guard let entries = try? fm.contentsOfDirectory(at: source, includingPropertiesForKeys: nil) else { return }
+        for file in entries {
+            let dest = destination.appendingPathComponent(file.lastPathComponent)
+            do {
+                if fm.fileExists(atPath: dest.path) {
+                    try fm.removeItem(at: dest)
+                }
+                try fm.moveItem(at: file, to: dest)
+            } catch {
+                NSLog("NightGard: migrate %@ → %@ failed: %@", file.path, dest.path, "\(error)")
+            }
+        }
     }
 
     private func addFilesInFolderToPlaylist(folder: URL, playlist: String) {
