@@ -29,6 +29,7 @@ final class LibraryService {
     // Scan state (Apple Music Scan / Shazam Scan)
     var scanState: ScanState = .idle
     var scanCancelRequested = false
+    private var activeMediaFolderAccess: URL?
 
     // MARK: - Authorization
 
@@ -139,7 +140,12 @@ final class LibraryService {
     func runAppleMusicScan() async {
         isWorking = true
         scanCancelRequested = false
-        defer { isWorking = false }
+        defer {
+            isWorking = false
+            #if os(macOS)
+            releaseMediaFolderAccess()
+            #endif
+        }
 
         #if os(macOS)
         let holdingFolder: URL
@@ -274,15 +280,66 @@ final class LibraryService {
     // MARK: - Holding folder + file operations
 
     #if os(macOS)
+    private static let mediaFolderBookmarkKey = "mediaFolderBookmark"
+
+    /// Resolves (or prompts the user for) the media folder where Holding/ and
+    /// Quarantine/ subfolders live. Uses a security-scoped bookmark so the app
+    /// keeps read-write access across launches under the sandbox.
+    private func resolveMediaFolder() throws -> URL {
+        if let data = UserDefaults.standard.data(forKey: Self.mediaFolderBookmarkKey) {
+            var stale = false
+            if let url = try? URL(resolvingBookmarkData: data, options: [.withSecurityScope], relativeTo: nil, bookmarkDataIsStale: &stale) {
+                if stale {
+                    // Refresh the bookmark so it keeps resolving on future launches.
+                    if url.startAccessingSecurityScopedResource() {
+                        defer { url.stopAccessingSecurityScopedResource() }
+                        if let refreshed = try? url.bookmarkData(options: [.withSecurityScope], includingResourceValuesForKeys: nil, relativeTo: nil) {
+                            UserDefaults.standard.set(refreshed, forKey: Self.mediaFolderBookmarkKey)
+                        }
+                    }
+                }
+                return url
+            }
+        }
+        // No bookmark (or it failed to resolve) — prompt the user.
+        let panel = NSOpenPanel()
+        panel.title = "Choose your music media folder"
+        panel.prompt = "Use This Folder"
+        panel.message = "Pick the folder where NightGard Library Commander will create Holding and Quarantine subfolders (typically ~/Music/Music/Media.localized/ or an external drive)."
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+        panel.directoryURL = FileManager.default.urls(for: .musicDirectory, in: .userDomainMask).first
+        guard panel.runModal() == .OK, let picked = panel.url else {
+            throw LockerError.noiCloud  // reusing — just signals "couldn't get a folder"
+        }
+        let bookmark = try picked.bookmarkData(options: [.withSecurityScope], includingResourceValuesForKeys: nil, relativeTo: nil)
+        UserDefaults.standard.set(bookmark, forKey: Self.mediaFolderBookmarkKey)
+        return picked
+    }
+
     private func createHoldingFolder() throws -> URL {
-        let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
-            ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Downloads")
-        let root = downloads.appendingPathComponent("NightGard Library Commander - Cleaned", isDirectory: true)
+        let mediaFolder = try resolveMediaFolder()
+        guard mediaFolder.startAccessingSecurityScopedResource() else {
+            throw LockerError.noiCloud
+        }
+        activeMediaFolderAccess = mediaFolder
+        let root = mediaFolder.appendingPathComponent("NightGard Library Commander - Cleaned", isDirectory: true)
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd HHmm"
         let dated = root.appendingPathComponent(formatter.string(from: Date()), isDirectory: true)
         try FileManager.default.createDirectory(at: dated, withIntermediateDirectories: true)
         return dated
+    }
+
+    private func releaseMediaFolderAccess() {
+        activeMediaFolderAccess?.stopAccessingSecurityScopedResource()
+        activeMediaFolderAccess = nil
+    }
+
+    func forgetMediaFolder() {
+        UserDefaults.standard.removeObject(forKey: Self.mediaFolderBookmarkKey)
     }
 
     private func trackLocation(persistentID: String) -> URL? {
