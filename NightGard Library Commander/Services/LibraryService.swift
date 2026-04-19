@@ -303,9 +303,17 @@ final class LibraryService {
         }
         // No bookmark (or it failed to resolve) — prompt the user.
         let panel = NSOpenPanel()
-        panel.title = "Choose your music media folder"
-        panel.prompt = "Use This Folder"
-        panel.message = "Pick the folder where NightGard Library Commander will create Holding and Quarantine subfolders (typically ~/Music/Music/Media.localized/ or an external drive)."
+        panel.title = "Choose NightGard Library Commander working folder"
+        panel.prompt = "Choose This Folder"
+        panel.message = """
+        NightGard Library Commander needs a working folder on a drive you own. Two subfolders will be created inside whatever you pick:
+
+        • Holding/ — temporary home for audio files after Library Commander copies them from Music and before re-importing into the "Cleaned NightGard Library Commander" playlist. Also an archive you can browse in Finder afterward.
+
+        • Quarantine/ — final resting place for tracks that neither Apple Music Scan nor Shazam Scan could identify. Your call later on what to do with them.
+
+        Suggested: your ~/Music folder, or a folder on an external drive with plenty of free space. You grant this access once; the app remembers it.
+        """
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
