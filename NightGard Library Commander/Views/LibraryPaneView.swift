@@ -132,8 +132,11 @@ struct LibraryPaneView: View {
                     Text("\(kind) — \(processed.formatted()) / \(total.formatted())")
                         .font(.system(size: 15, weight: .semibold))
                     Spacer()
-                    Button("Cancel") { library.cancelScan() }
-                        .buttonStyle(.bordered)
+                    Button(library.scanCancelRequested ? "Cancelling…" : "Cancel") {
+                        library.cancelScan()
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(library.scanCancelRequested)
                 }
                 ProgressView(value: Double(processed), total: Double(max(total, 1)))
                 Text(current)

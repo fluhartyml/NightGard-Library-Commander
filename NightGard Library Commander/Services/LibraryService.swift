@@ -43,6 +43,7 @@ final class LibraryService {
         guard authorizationStatus == .authorized else { return }
         isWorking = true
         defer { isWorking = false }
+        try? await Task.sleep(nanoseconds: 16_000_000)  // one frame — let UI paint "Working…"
         do {
             var request = MusicLibraryRequest<Playlist>()
             request.limit = 500
@@ -102,6 +103,7 @@ final class LibraryService {
     func refreshStats() async {
         isWorking = true
         defer { isWorking = false }
+        try? await Task.sleep(nanoseconds: 16_000_000)  // one frame — let UI paint "Working…"
         #if os(macOS)
         stats = runAppleScriptStats()
         #else
@@ -120,6 +122,7 @@ final class LibraryService {
     func refreshUploadedTracks() async {
         isWorking = true
         defer { isWorking = false }
+        try? await Task.sleep(nanoseconds: 16_000_000)  // one frame — let UI paint "Working…"
         #if os(macOS)
         uploadedTracks = runAppleScriptUploadedTracks()
         #else
