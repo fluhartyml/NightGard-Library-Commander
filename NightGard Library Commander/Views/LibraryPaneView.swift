@@ -71,7 +71,16 @@ struct LibraryPaneView: View {
             }
 
             #if os(macOS)
-            if library.uploadedTracks.isEmpty {
+            if library.uploadedTracks.isEmpty && library.isWorking {
+                VStack(spacing: 12) {
+                    ProgressView()
+                        .controlSize(.large)
+                    Text("One moment please…")
+                        .font(.system(size: 18))
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if library.uploadedTracks.isEmpty {
                 ContentUnavailableView(
                     "No uploaded tracks loaded",
                     systemImage: "icloud.slash",

@@ -5,9 +5,19 @@
 
 import SwiftUI
 
+struct LibraryHealthButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .opacity(configuration.isPressed ? 0.5 : 1.0)
+            .scaleEffect(configuration.isPressed ? 0.97 : 1.0)
+            .animation(.easeInOut(duration: 0.12), value: configuration.isPressed)
+    }
+}
+
 struct StatsPaneView: View {
     @Environment(LibraryService.self) private var library
     var onJumpToLibrary: () -> Void = {}
+    @State private var healthHovering = false
 
     var body: some View {
         ScrollView {
@@ -29,11 +39,18 @@ struct StatsPaneView: View {
                                 .font(.system(size: 14))
                                 .foregroundStyle(.tertiary)
                         }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 6)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(.tint.opacity(healthHovering ? 0.15 : 0))
+                        )
                         .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(LibraryHealthButtonStyle())
                     #if os(macOS)
                     .onHover { hovering in
+                        healthHovering = hovering
                         if hovering { NSCursor.pointingHand.push() } else { NSCursor.pop() }
                     }
                     #endif

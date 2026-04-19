@@ -53,6 +53,40 @@ struct ContentView: View {
                     .padding()
             }
         }
+        .safeAreaInset(edge: .bottom) {
+            footerStatusBar
+        }
+    }
+
+    private var footerStatusBar: some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(library.isWorking ? Color.blue : Color.green)
+                .frame(width: 8, height: 8)
+            Text(footerMessage)
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity)
+        .background(.bar)
+    }
+
+    private var footerMessage: String {
+        if !library.statusMessage.isEmpty {
+            return library.statusMessage
+        }
+        if case .scanning(let kind, let current, let processed, let total, _, _, _, _) = library.scanState {
+            return "\(kind) \(processed.formatted())/\(total.formatted()) — \(current)"
+        }
+        if library.isWorking {
+            return "Working…"
+        }
+        return "Ready"
     }
 
     @ViewBuilder
