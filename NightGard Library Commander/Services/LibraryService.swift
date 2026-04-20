@@ -141,6 +141,9 @@ final class LibraryService {
     ///    and add every file from the holding folder — Apple's matching picks up the clean
     ///    metadata on re-import.
     func runAppleMusicScan() async {
+        // Guard against a double-click racing ahead of the disabled-state propagation.
+        if case .scanning = scanState { return }
+        if isWorking { return }
         isWorking = true
         scanCancelRequested = false
         defer {
@@ -203,6 +206,9 @@ final class LibraryService {
             // tracks return empty location → skip without hitting iTunes at all.
             guard let sourceURL = trackLocation(persistentID: track.persistentID) else {
                 needsDownload += 1
+                // Yield to the run loop every 50 iCloud-only tracks so the UI stays
+                // responsive during the fast-skip phase.
+                if needsDownload % 50 == 0 { await Task.yield() }
                 continue
             }
             #endif
@@ -298,54 +304,24 @@ final class LibraryService {
     // MARK: - Holding folder + file operations
 
     #if os(macOS)
-    private static let mediaFolderBookmarkKey = "mediaFolderBookmark"
-
-    /// Resolves (or prompts the user for) the media folder where Holding/ and
-    /// Quarantine/ subfolders live. Uses a security-scoped bookmark so the app
-    /// keeps read-write access across launches under the sandbox.
+    /// Prompts the user for a working folder on every scan. No bookmark is persisted —
+    /// user explicitly picks the drive/folder each time so there's no surprise about
+    /// where output lands.
     private func resolveMediaFolder() throws -> URL {
-        if let data = UserDefaults.standard.data(forKey: Self.mediaFolderBookmarkKey) {
-            var stale = false
-            if let url = try? URL(resolvingBookmarkData: data, options: [.withSecurityScope], relativeTo: nil, bookmarkDataIsStale: &stale) {
-                // If the user deleted the folder but the drive/volume is still mounted,
-                // recreate it so scans keep working without re-prompting.
-                if !FileManager.default.fileExists(atPath: url.path) {
-                    if url.startAccessingSecurityScopedResource() {
-                        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-                        url.stopAccessingSecurityScopedResource()
-                    }
-                }
-                if stale {
-                    // Refresh the bookmark so it keeps resolving on future launches.
-                    if url.startAccessingSecurityScopedResource() {
-                        defer { url.stopAccessingSecurityScopedResource() }
-                        if let refreshed = try? url.bookmarkData(options: [.withSecurityScope], includingResourceValuesForKeys: nil, relativeTo: nil) {
-                            UserDefaults.standard.set(refreshed, forKey: Self.mediaFolderBookmarkKey)
-                        }
-                    }
-                }
-                // Only return the URL if the folder is actually usable. If recreate
-                // failed (drive unmounted, etc.), fall through and prompt.
-                if FileManager.default.fileExists(atPath: url.path) {
-                    return url
-                }
-            }
-        }
-        // No bookmark (or it failed to resolve) — prompt the user.
         let panel = NSOpenPanel()
         panel.title = "Working folder"
         panel.prompt = "Choose This Folder"
-        panel.message = "Pick a folder. Library Commander creates Holding/ and Quarantine/ inside it."
+        panel.message = "Pick a folder or drive. Library Commander creates Holding/, Cleaned/, and Quarantine/ inside it."
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
         panel.canCreateDirectories = true
         panel.directoryURL = FileManager.default.urls(for: .musicDirectory, in: .userDomainMask).first
         guard panel.runModal() == .OK, let picked = panel.url else {
+            NSLog("NightGard: working-folder picker cancelled or returned nil URL")
             throw LockerError.noiCloud  // reusing — just signals "couldn't get a folder"
         }
-        let bookmark = try picked.bookmarkData(options: [.withSecurityScope], includingResourceValuesForKeys: nil, relativeTo: nil)
-        UserDefaults.standard.set(bookmark, forKey: Self.mediaFolderBookmarkKey)
+        NSLog("NightGard: picked working folder = %@", picked.path)
         return picked
     }
 
@@ -357,10 +333,13 @@ final class LibraryService {
 
     private func createScanFolders() throws -> ScanFolders {
         let mediaFolder = try resolveMediaFolder()
-        guard mediaFolder.startAccessingSecurityScopedResource() else {
-            throw LockerError.noiCloud
-        }
-        activeMediaFolderAccess = mediaFolder
+        let scoped = mediaFolder.startAccessingSecurityScopedResource()
+        NSLog("NightGard: startAccessingSecurityScopedResource = %@ for %@", scoped ? "true" : "false", mediaFolder.path)
+        // Some container paths (e.g. ~/Music) don't require a security-scoped call
+        // but return false — we continue anyway and let createDirectory tell us
+        // whether the write actually works. If startAccessing did return true we
+        // need to pair it with stop, which happens via releaseMediaFolderAccess.
+        if scoped { activeMediaFolderAccess = mediaFolder }
         let root = mediaFolder.appendingPathComponent("NightGard Library Commander", isDirectory: true)
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd HHmm"
@@ -368,19 +347,22 @@ final class LibraryService {
         let holding = dated.appendingPathComponent("Holding", isDirectory: true)
         let cleaned = dated.appendingPathComponent("Cleaned", isDirectory: true)
         let quarantine = dated.appendingPathComponent("Quarantine", isDirectory: true)
-        try FileManager.default.createDirectory(at: holding, withIntermediateDirectories: true)
-        try FileManager.default.createDirectory(at: cleaned, withIntermediateDirectories: true)
-        try FileManager.default.createDirectory(at: quarantine, withIntermediateDirectories: true)
+        NSLog("NightGard: creating tree at %@", dated.path)
+        do {
+            try FileManager.default.createDirectory(at: holding, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: cleaned, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: quarantine, withIntermediateDirectories: true)
+        } catch {
+            NSLog("NightGard: createDirectory FAILED: %@", "\(error)")
+            throw error
+        }
+        NSLog("NightGard: tree created OK — Holding=%@", holding.path)
         return ScanFolders(holding: holding, cleaned: cleaned, quarantine: quarantine)
     }
 
     private func releaseMediaFolderAccess() {
         activeMediaFolderAccess?.stopAccessingSecurityScopedResource()
         activeMediaFolderAccess = nil
-    }
-
-    func forgetMediaFolder() {
-        UserDefaults.standard.removeObject(forKey: Self.mediaFolderBookmarkKey)
     }
 
     private func trackLocation(persistentID: String) -> URL? {

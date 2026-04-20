@@ -64,28 +64,28 @@
 // WORKING FOLDER (Holding + Quarantine)
 // ============================================================
 //
-// On first Apple Music Scan the app prompts the user via NSOpenPanel to
-// choose a "working folder." Sandbox saves a security-scoped bookmark so
-// subsequent launches don't re-prompt. Inside that folder, the app creates:
+// EVERY Apple Music Scan prompts the user via NSOpenPanel to choose a
+// working folder or drive. No bookmark is persisted — the user explicitly
+// picks the destination each time, so there's no surprise about where
+// output lands (and no stuck bookmark pointing at a deleted/trashed folder).
+// Inside the picked folder, the app creates:
 //
-//   Holding/       Temporary audio files copied from Music library during
-//                  a scan. After each scan, files here get re-imported into
-//                  the "Cleaned NightGard Library Commander" playlist —
-//                  Apple's own matching then assigns canonical Apple Music
-//                  IDs. Files stay on disk as a user-browsable archive.
-//
-//   Quarantine/    Final home for tracks that failed both Apple Music Scan
-//                  AND Shazam Scan. User decides what to do with them later.
+//   NightGard Library Commander/<YYYY-MM-DD HHmm>/
+//     Holding/       Temporary audio files copied from Music library during
+//                    a scan. After each scan, files here get re-imported into
+//                    the "Cleaned NightGard Library Commander" playlist —
+//                    Apple's own matching then assigns canonical Apple Music
+//                    IDs.
+//     Cleaned/       Where files land after successful re-import. User-
+//                    deletable archive.
+//     Quarantine/    Final home for tracks that failed both Apple Music Scan
+//                    AND Shazam Scan. User decides what to do with them later.
 //
 // Why ask instead of hard-coding ~/Downloads:
 //   Sandbox silently redirects standard paths (like the Downloads folder) to
 //   the app's container (~/Library/Containers/<bundle>/Data/Downloads).
-//   User-picked folders bypass this via security-scoped bookmarks — the user
-//   grants explicit access, and that access persists.
-//
-// Reset paths:
-//   UserDefaults.standard.removeObject(forKey: "mediaFolderBookmark")
-//   or LibraryService.forgetMediaFolder()
+//   User-picked folders bypass this; the NSOpenPanel grants explicit access
+//   for the duration of that scan.
 //
 // ============================================================
 // ARCHITECTURE DECISIONS
